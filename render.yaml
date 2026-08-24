@@ -1,0 +1,22 @@
+databases:
+  - name: gli-proyeccion-db
+    plan: free
+    databaseName: gli_proyeccion
+    user: gli_proyeccion
+
+services:
+  - type: web
+    name: gli-proyeccion-ventas
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gli-proyeccion-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
