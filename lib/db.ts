@@ -5,6 +5,7 @@ type Client = {
   connect?: () => Promise<{
     query: (text: string, params?: unknown[]) => Promise<{ rows: Row[] }>;
     release: () => void;
+    on?: (event: "error", listener: (err: Error) => void) => void;
   }>;
 };
 
@@ -71,6 +72,11 @@ async function createClient(): Promise<Client> {
       connectionString: process.env.DATABASE_URL,
       ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
     });
+    // Without this, a dropped idle connection crashes the whole process (node-postgres
+    // emits 'error' on the pool instead of rejecting a promise) — see node-postgres#1324.
+    pool.on("error", (err) => {
+      console.error("Unexpected Postgres pool error:", err.message);
+    });
     return pool as unknown as Client;
   }
 
@@ -124,6 +130,9 @@ export async function withTransaction(fn: Tx): Promise<void> {
   // pinned to one checked-out connection. PGlite is a single connection already.
   if (client.connect) {
     const conn = await client.connect();
+    conn.on?.("error", () => {
+      /* swallowed: the failing query's own promise rejection is what we act on below */
+    });
     const q = async <T extends Row = Row>(text: string, params: unknown[] = []) =>
       (await conn.query(text, params)).rows as T[];
     try {
