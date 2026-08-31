@@ -33,7 +33,7 @@ export default function VendorSection({
   );
 
   return (
-    <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
+    <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
       <button
         onClick={() => setOpen((o) => !o)}
         className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left hover:bg-surface-container-low"

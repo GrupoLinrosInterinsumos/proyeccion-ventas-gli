@@ -15,7 +15,7 @@ export default async function VentasPage() {
   const rows = await getVendorProductTable(session.vendedor, period);
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-surface-container-low">
       <TopNav session={session} active="/ventas" />
       <main className="mx-auto max-w-container px-margin-mobile py-8 md:px-margin-desktop">
         <div className="mb-6">

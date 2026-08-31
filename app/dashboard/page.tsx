@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import {
@@ -40,7 +41,7 @@ export default async function DashboardPage({
   const kpis = await getDashboardKpis(period, { region: region || undefined, vendedor: vendedor || undefined });
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-surface-container-low">
       <TopNav session={session} active="/dashboard" />
       <main className="mx-auto max-w-container px-margin-mobile py-8 md:px-margin-desktop">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
@@ -57,8 +58,16 @@ export default async function DashboardPage({
         </div>
 
         <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <KpiCard label="Promedio mensual (3m)" value={formatQty(kpis.promedioTotal)} hint="unidades" />
           <KpiCard
+            icon={<IconBox />}
+            tone="primary"
+            label="Promedio mensual (3m)"
+            value={formatQty(kpis.promedioTotal)}
+            hint="unidades"
+          />
+          <KpiCard
+            icon={<IconTarget />}
+            tone="secondary"
             label="Proyección total del mes"
             value={formatQty(kpis.proyeccionTotal)}
             delta={
@@ -67,9 +76,11 @@ export default async function DashboardPage({
                 : null
             }
           />
-          <KpiCard label="Vendedores" value={String(kpis.vendedores)} />
-          <KpiCard label="Productos con movimiento" value={String(kpis.productos)} />
+          <KpiCard icon={<IconUsers />} tone="tertiary" label="Vendedores" value={String(kpis.vendedores)} />
+          <KpiCard icon={<IconGrid />} tone="primary" label="Productos con movimiento" value={String(kpis.productos)} />
           <KpiCard
+            icon={<IconCheck />}
+            tone="tertiary"
             label="Cobertura de proyección"
             value={formatPercent(kpis.paresTotal > 0 ? (kpis.paresConProyeccion / kpis.paresTotal) * 100 : 0)}
             hint={`${kpis.paresConProyeccion} de ${kpis.paresTotal} productos·vendedor`}
@@ -114,8 +125,9 @@ async function VendorSummarySection({ region, period }: { region: Region; period
 
   return (
     <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <section className="rounded-xl border border-outline-variant bg-surface-container-lowest lg:col-span-2">
-        <h2 className="border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
+      <section className="rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04] lg:col-span-2">
+        <h2 className="flex items-center gap-2.5 border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
+          <span className="h-2 w-2 rounded-full bg-primary" aria-hidden />
           Por vendedor &middot; {REGION_LABELS[region]}
         </h2>
         <div className="thin-scroll overflow-x-auto">
@@ -141,7 +153,7 @@ async function VendorSummarySection({ region, period }: { region: Region; period
                 const delta =
                   r.promedio_mensual > 0 ? ((r.proyeccion - r.promedio_mensual) / r.promedio_mensual) * 100 : null;
                 return (
-                  <tr key={r.vendedor} className="border-b border-outline-variant last:border-b-0">
+                  <tr key={r.vendedor} className="border-b border-outline-variant last:border-b-0 hover:bg-surface-container-low">
                     <td className="px-5 py-3 text-body-sm font-medium text-on-surface">
                       {r.vendedor}
                       {r.pendientes > 0 && (
@@ -191,8 +203,9 @@ async function RegionSummarySection({ period }: { period: string }) {
 
   return (
     <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <section className="rounded-xl border border-outline-variant bg-surface-container-lowest lg:col-span-2">
-        <h2 className="border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
+      <section className="rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04] lg:col-span-2">
+        <h2 className="flex items-center gap-2.5 border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
+          <span className="h-2 w-2 rounded-full bg-primary" aria-hidden />
           Por región
         </h2>
         <div className="thin-scroll overflow-x-auto">
@@ -221,7 +234,7 @@ async function RegionSummarySection({ period }: { period: string }) {
                 const delta =
                   r.promedioTotal > 0 ? ((r.proyeccionTotal - r.promedioTotal) / r.promedioTotal) * 100 : null;
                 return (
-                  <tr key={r.region} className="border-b border-outline-variant last:border-b-0">
+                  <tr key={r.region} className="border-b border-outline-variant last:border-b-0 hover:bg-surface-container-low">
                     <td className="px-5 py-3 text-body-sm font-medium text-on-surface">
                       {REGION_LABELS[r.region]}
                     </td>
@@ -266,8 +279,9 @@ async function RegionSummarySection({ period }: { period: string }) {
 function ProductBreakdownCard({ products }: { products: ProductBreakdownRow[] }) {
   const max = Math.max(...products.map((p) => p.promedio_mensual), 1);
   return (
-    <section className="rounded-xl border border-outline-variant bg-surface-container-lowest">
-      <h2 className="border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
+    <section className="rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
+      <h2 className="flex items-center gap-2.5 border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
+        <span className="h-2 w-2 rounded-full bg-tertiary" aria-hidden />
         Por producto
       </h2>
       {products.length === 0 ? (
@@ -304,21 +318,38 @@ function ProductBreakdownCard({ products }: { products: ProductBreakdownRow[] })
   );
 }
 
+const TONE_CHIP: Record<"primary" | "secondary" | "tertiary", string> = {
+  primary: "bg-primary-fixed text-on-primary-fixed-variant",
+  secondary: "bg-secondary-fixed text-on-secondary-fixed-variant",
+  tertiary: "bg-tertiary-fixed text-on-tertiary-fixed-variant",
+};
+
 function KpiCard({
   label,
   value,
   delta,
   hint,
+  icon,
+  tone = "primary",
 }: {
   label: string;
   value: string;
   delta?: number | null;
   hint?: string;
+  icon?: ReactNode;
+  tone?: "primary" | "secondary" | "tertiary";
 }) {
   return (
-    <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-5">
-      <p className="text-label-md uppercase tracking-wide text-on-surface-variant">{label}</p>
-      <div className="mt-2 flex items-baseline gap-2">
+    <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-5 shadow-sm shadow-black/[0.04]">
+      <div className="flex items-center gap-3">
+        {icon && (
+          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${TONE_CHIP[tone]}`}>
+            {icon}
+          </span>
+        )}
+        <p className="text-label-md uppercase tracking-wide text-on-surface-variant">{label}</p>
+      </div>
+      <div className="mt-3 flex items-baseline gap-2">
         <p className="text-headline-lg text-on-surface">{value}</p>
         {delta !== null && delta !== undefined && (
           <span
@@ -335,5 +366,56 @@ function KpiCard({
       </div>
       {hint && <p className="mt-1 text-label-sm text-on-surface-variant">{hint}</p>}
     </div>
+  );
+}
+
+function IconBox() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="m3.5 7 8.5-4 8.5 4-8.5 4-8.5-4Z" strokeLinejoin="round" />
+      <path d="M3.5 7v10l8.5 4 8.5-4V7" strokeLinejoin="round" />
+      <path d="M12 11v10" />
+    </svg>
+  );
+}
+
+function IconTarget() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="4" />
+      <circle cx="12" cy="12" r="0.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+function IconUsers() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" strokeLinecap="round" />
+      <path d="M16 8.5a3 3 0 1 1 0 5.9" strokeLinecap="round" />
+      <path d="M15 14c2.5.3 4.5 2.1 4.5 5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconGrid() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="3.5" y="3.5" width="7" height="7" rx="1.2" />
+      <rect x="13.5" y="3.5" width="7" height="7" rx="1.2" />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="1.2" />
+      <rect x="13.5" y="13.5" width="7" height="7" rx="1.2" />
+    </svg>
+  );
+}
+
+function IconCheck() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="m8.5 12.5 2.3 2.3 4.7-5.1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

@@ -19,7 +19,7 @@ export default async function ImportarPage() {
   const imports = await listImports();
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-surface-container-low">
       <TopNav session={session} active="/importar" />
       <main className="mx-auto max-w-container px-margin-mobile py-8 md:px-margin-desktop">
         <p className="text-label-md uppercase tracking-wide text-on-surface-variant">Data mensual</p>
@@ -30,11 +30,11 @@ export default async function ImportarPage() {
           vendedor.
         </p>
 
-        <div className="mt-6 max-w-2xl rounded-xl border border-outline-variant bg-surface-container-lowest p-6">
+        <div className="mt-6 max-w-2xl rounded-xl border border-outline-variant bg-surface-container-lowest p-6 shadow-sm shadow-black/[0.04]">
           <UploadForm />
         </div>
 
-        <section className="mt-8 max-w-2xl rounded-xl border border-outline-variant bg-surface-container-lowest">
+        <section className="mt-8 max-w-2xl rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
           <h2 className="border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
             Historial de importaciones
           </h2>
