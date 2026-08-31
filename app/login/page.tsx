@@ -31,17 +31,8 @@ export default async function LoginPage() {
           <GliLogo variant="onDark" height={48} />
         </div>
 
-        <div className="relative flex flex-col gap-5">
-          <span className="w-fit rounded-full border border-white/15 bg-white/10 px-3 py-1 text-label-sm uppercase tracking-wide text-primary-fixed backdrop-blur-sm">
-            Sistema de proyección de ventas
-          </span>
-          <h1 className="max-w-md text-headline-lg text-on-primary">
-            El promedio de tus ventas, siempre a la vista.
-          </h1>
-          <p className="max-w-sm text-body-md text-primary-fixed/90">
-            Consulta el promedio de venta mensual de cada vendedor, define la proyección del mes
-            y registra observaciones — todo en un solo lugar.
-          </p>
+        <div className="relative">
+          <h1 className="max-w-sm text-headline-lg text-on-primary">Sistema de proyección de ventas</h1>
         </div>
 
         <div className="relative flex flex-wrap gap-2">
