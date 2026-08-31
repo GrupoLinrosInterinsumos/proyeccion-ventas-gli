@@ -244,3 +244,64 @@ export async function deleteUserAction(_prev: ActionState, formData: FormData): 
   revalidatePath("/usuarios");
   return { success: `${target[0].name} fue eliminado.` };
 }
+
+const editUserSchema = z.object({
+  id: z.string().regex(/^\d+$/, "Usuario inválido."),
+  name: z.string().trim().min(2, "Escribe un nombre."),
+  email: z.string().trim().toLowerCase().email("Correo inválido."),
+  vendedor: z.string().trim().min(2, "Escribe el nombre exacto del vendedor."),
+  region: z.enum(REGIONS),
+  password: z.string().optional(),
+  is_admin: z.string().optional(),
+});
+
+export async function editUserAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session || !session.isAdmin) return { error: "No autorizado." };
+
+  const parsed = editUserSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Datos inválidos." };
+  const data = parsed.data;
+  const id = Number(data.id);
+  const nextIsAdmin = data.is_admin === "on";
+
+  const current = await query<{ is_admin: boolean }>(`SELECT is_admin FROM users WHERE id = $1`, [id]);
+  if (current.length === 0) return { error: "Ese usuario ya no existe." };
+
+  if (current[0].is_admin && !nextIsAdmin && (await countAdmins()) <= 1) {
+    return { error: "No puedes quitarle el rol de administrador al único que queda." };
+  }
+
+  const password = data.password?.trim();
+  if (password && password.length < 6) {
+    return { error: "La contraseña debe tener al menos 6 caracteres." };
+  }
+
+  try {
+    if (password) {
+      await query(
+        `UPDATE users SET name=$1, email=$2, vendedor=$3, region=$4, is_admin=$5, password_hash=$6 WHERE id=$7`,
+        [data.name, data.email, data.vendedor, data.region, nextIsAdmin, bcrypt.hashSync(password, 10), id]
+      );
+    } else {
+      await query(
+        `UPDATE users SET name=$1, email=$2, vendedor=$3, region=$4, is_admin=$5 WHERE id=$6`,
+        [data.name, data.email, data.vendedor, data.region, nextIsAdmin, id]
+      );
+    }
+  } catch (err) {
+    const field = uniqueViolationField(err);
+    if (field === "email") return { error: `El correo ${data.email} ya está en uso.` };
+    if (field === "vendedor") return { error: `Ya existe otra cuenta para el vendedor "${data.vendedor}".` };
+    return { error: err instanceof Error ? err.message : "No se pudo actualizar el usuario." };
+  }
+
+  // If the admin edited their own account, refresh the session cookie so name/role/etc. stay in sync.
+  if (id === session.id) {
+    const updated = await findUserByEmail(data.email);
+    if (updated) await createSessionCookie(updated);
+  }
+
+  revalidatePath("/usuarios");
+  return { success: password ? "Usuario actualizado y contraseña cambiada." : "Usuario actualizado." };
+}
