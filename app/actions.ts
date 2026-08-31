@@ -9,6 +9,9 @@ import { createSessionCookie, clearSessionCookie, getSession, findUserByEmail } 
 import { parseSalesWorkbook } from "@/lib/import-excel";
 import { commitImport } from "@/lib/import-commit";
 import { currentProjectionPeriod } from "@/lib/period";
+import { REGIONS } from "@/lib/regions";
+import { generatePassword } from "@/lib/password";
+import { countAdmins } from "@/lib/users";
 
 export type ActionState = { error?: string; success?: string } | null;
 
@@ -163,4 +166,81 @@ export async function uploadImportAction(_prev: ActionState, formData: FormData)
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Error al procesar el archivo." };
   }
+}
+
+const createUserSchema = z.object({
+  name: z.string().trim().min(2, "Escribe un nombre."),
+  email: z.string().trim().toLowerCase().email("Correo inválido."),
+  vendedor: z.string().trim().min(2, "Escribe el nombre exacto del vendedor."),
+  region: z.enum(REGIONS),
+  password: z.string().optional(),
+  is_admin: z.string().optional(),
+});
+
+function uniqueViolationField(err: unknown): "email" | "vendedor" | null {
+  const detail = (err as { detail?: string; constraint?: string } | null)?.detail ?? "";
+  const constraint = (err as { constraint?: string } | null)?.constraint ?? "";
+  if (/email/i.test(detail) || /email/i.test(constraint)) return "email";
+  if (/vendedor/i.test(detail) || /vendedor/i.test(constraint)) return "vendedor";
+  return null;
+}
+
+export async function createUserAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session || !session.isAdmin) return { error: "No autorizado." };
+
+  const parsed = createUserSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Datos inválidos." };
+  const data = parsed.data;
+
+  const password = data.password?.trim() || generatePassword();
+  if (password.length < 6) return { error: "La contraseña debe tener al menos 6 caracteres." };
+
+  try {
+    await query(
+      `INSERT INTO users (name, email, password_hash, vendedor, region, is_admin)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [
+        data.name,
+        data.email,
+        bcrypt.hashSync(password, 10),
+        data.vendedor,
+        data.region,
+        data.is_admin === "on",
+      ]
+    );
+  } catch (err) {
+    const field = uniqueViolationField(err);
+    if (field === "email") return { error: `El correo ${data.email} ya está en uso.` };
+    if (field === "vendedor") return { error: `Ya existe una cuenta para el vendedor "${data.vendedor}".` };
+    return { error: err instanceof Error ? err.message : "No se pudo crear el usuario." };
+  }
+
+  revalidatePath("/usuarios");
+  return {
+    success: `Usuario creado. Correo: ${data.email} · Contraseña: ${password} (guárdala, no se muestra de nuevo).`,
+  };
+}
+
+export async function deleteUserAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session || !session.isAdmin) return { error: "No autorizado." };
+
+  const id = Number(formData.get("id"));
+  if (!id) return { error: "Usuario inválido." };
+  if (id === session.id) return { error: "No puedes eliminar tu propia cuenta." };
+
+  const target = await query<{ is_admin: boolean; name: string }>(
+    `SELECT is_admin, name FROM users WHERE id = $1`,
+    [id]
+  );
+  if (target.length === 0) return { error: "Ese usuario ya no existe." };
+
+  if (target[0].is_admin && (await countAdmins()) <= 1) {
+    return { error: "No puedes eliminar al único administrador." };
+  }
+
+  await query(`DELETE FROM users WHERE id = $1`, [id]);
+  revalidatePath("/usuarios");
+  return { success: `${target[0].name} fue eliminado.` };
 }
