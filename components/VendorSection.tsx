@@ -78,6 +78,11 @@ export default function VendorSection({
 
       {open && (
         <div className="border-t border-outline-variant">
+          {editable && (
+            <div className="border-b border-outline-variant bg-surface-container-low px-4 py-2.5">
+              <AddProductForm vendedor={vendedor} />
+            </div>
+          )}
           <div className="thin-scroll overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
@@ -168,11 +173,6 @@ export default function VendorSection({
               </tbody>
             </table>
           </div>
-          {editable && (
-            <div className="px-4 pb-3">
-              <AddProductForm vendedor={vendedor} />
-            </div>
-          )}
         </div>
       )}
     </section>

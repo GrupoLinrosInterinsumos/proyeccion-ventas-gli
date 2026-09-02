@@ -22,7 +22,7 @@ export default function AddProductForm({ vendedor }: { vendedor: string }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="mt-2 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-body-sm font-medium text-primary hover:bg-primary-fixed/40"
+        className="flex items-center gap-1.5 rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-body-sm font-medium text-primary shadow-sm shadow-black/[0.04] hover:bg-primary-fixed/30"
       >
         <span aria-hidden>+</span> Agregar producto
       </button>
@@ -33,7 +33,7 @@ export default function AddProductForm({ vendedor }: { vendedor: string }) {
     <form
       ref={formRef}
       action={formAction}
-      className="mt-2 flex flex-wrap items-end gap-2 rounded-md border border-dashed border-outline-variant bg-surface-container-low p-3"
+      className="flex flex-wrap items-end gap-2 rounded-md border border-dashed border-outline-variant bg-surface-container-lowest p-3"
     >
       <input type="hidden" name="vendedor" value={vendedor} />
       <div className="flex flex-col gap-1">
