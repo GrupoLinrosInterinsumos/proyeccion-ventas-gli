@@ -4,17 +4,19 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import {
   getDashboardKpis,
+  getPeriodComparison,
   getProductBreakdown,
   getRegionBreakdown,
   getVendorProductTable,
   getVendorSummaryForRegion,
   listVendedores,
   listCategoriaN2,
+  type PeriodComparison,
 } from "@/lib/sales";
 import { searchVendedores, type UserListRow } from "@/lib/users";
 import { openProjectionPeriod, closedMonthsForPeriod, periodLabel, periodStatus } from "@/lib/period";
 import { isRegion, REGION_LABELS, type Region } from "@/lib/regions";
-import { formatPercent, formatQty } from "@/lib/format";
+import { formatPercent, formatQty, formatUsdCompact } from "@/lib/format";
 import TopNav from "@/components/TopNav";
 import DashboardFilters from "@/components/DashboardFilters";
 import VendorSection from "@/components/VendorSection";
@@ -50,11 +52,20 @@ export default async function DashboardPage({
     .filter((v) => !region || v.region === region)
     .map((v) => ({ vendedor: v.vendedor, name: v.name }));
 
-  const kpis = await getDashboardKpis(period, {
+  const dashboardFilters = {
     region: region || undefined,
     vendedor: vendedor || undefined,
     categoriaN2: categoriaN2 || undefined,
-  });
+  };
+  const [kpis, comparison] = await Promise.all([
+    getDashboardKpis(period, dashboardFilters),
+    getPeriodComparison(period, dashboardFilters),
+  ]);
+  const comparisonHref = `/dashboard/comparacion?period=${encodeURIComponent(period)}${
+    region ? `&region=${encodeURIComponent(region)}` : ""
+  }${vendedor ? `&vendedor=${encodeURIComponent(vendedor)}` : ""}${
+    categoriaN2 ? `&categoriaN2=${encodeURIComponent(categoriaN2)}` : ""
+  }`;
 
   return (
     <div className="min-h-screen bg-surface-container-low">
@@ -119,6 +130,13 @@ export default async function DashboardPage({
                 : null
             }
           />
+          <KpiCard
+            icon={<IconDollar />}
+            tone="secondary"
+            label="Ingreso proyectado (USD)"
+            value={formatUsdCompact(kpis.ingresoProyectado)}
+            hint="suma de proyección × precio por cliente"
+          />
           <KpiCard icon={<IconUsers />} tone="tertiary" label="Vendedores" value={String(kpis.vendedores)} />
           <KpiCard icon={<IconGrid />} tone="primary" label="Productos con movimiento" value={String(kpis.productos)} />
           <KpiCard
@@ -128,6 +146,7 @@ export default async function DashboardPage({
             value={formatPercent(kpis.paresTotal > 0 ? (kpis.paresConProyeccion / kpis.paresTotal) * 100 : 0)}
             hint={`${kpis.paresConProyeccion} de ${kpis.paresTotal} productos·vendedor`}
           />
+          <ComparisonKpiCard comparison={comparison} href={comparisonHref} />
         </div>
 
         {vendedor ? (
@@ -391,6 +410,70 @@ const TONE_CHIP: Record<"primary" | "secondary" | "tertiary", string> = {
   tertiary: "bg-tertiary-fixed text-on-tertiary-fixed-variant",
 };
 
+/**
+ * Proyección vs. real del mes que acaba de cerrar. Clicking it opens the per vendedor·producto
+ * breakdown in a new tab. Turns red when actual sales doubled what was projected.
+ */
+function ComparisonKpiCard({ comparison, href }: { comparison: PeriodComparison; href: string }) {
+  const delta =
+    comparison.proyectado > 0 ? ((comparison.real - comparison.proyectado) / comparison.proyectado) * 100 : null;
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`rounded-xl border p-5 shadow-sm shadow-black/[0.04] transition-colors hover:border-primary ${
+        comparison.excedido
+          ? "border-error-container bg-error-container"
+          : "border-outline-variant bg-surface-container-lowest"
+      }`}
+    >
+      <div className="flex items-center gap-3">
+        <span
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+            comparison.excedido ? "bg-on-error-container/15 text-on-error-container" : TONE_CHIP.secondary
+          }`}
+        >
+          <IconTarget />
+        </span>
+        <p
+          className={`text-label-md uppercase tracking-wide ${
+            comparison.excedido ? "text-on-error-container" : "text-on-surface-variant"
+          }`}
+        >
+          Proyectado vs. real · {periodLabel(comparison.previousPeriod)}
+        </p>
+      </div>
+      <div className="mt-3 flex items-baseline gap-2">
+        <p className={`text-headline-lg ${comparison.excedido ? "text-on-error-container" : "text-on-surface"}`}>
+          {formatQty(comparison.real)}
+        </p>
+        <span className={`text-body-sm ${comparison.excedido ? "text-on-error-container" : "text-on-surface-variant"}`}>
+          / {formatQty(comparison.proyectado)} proyectado
+        </span>
+        {delta !== null && (
+          <span
+            className={`rounded px-1.5 py-0.5 text-label-sm font-medium ${
+              delta >= 0
+                ? "bg-tertiary-fixed text-on-tertiary-fixed-variant"
+                : "bg-secondary-fixed text-on-secondary-fixed-variant"
+            }`}
+          >
+            {delta >= 0 ? "+" : ""}
+            {Math.round(delta)}%
+          </span>
+        )}
+      </div>
+      <p className={`mt-1 text-label-sm ${comparison.excedido ? "text-on-error-container" : "text-on-surface-variant"}`}>
+        {comparison.excedido
+          ? "Excedido · coordinar con compras — clic para ver el desglose"
+          : "Clic para ver el desglose por vendedor y producto"}
+      </p>
+    </a>
+  );
+}
+
 function KpiCard({
   label,
   value,
@@ -483,6 +566,19 @@ function IconCheck() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <circle cx="12" cy="12" r="8.5" />
       <path d="m8.5 12.5 2.3 2.3 4.7-5.1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconDollar() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 2.5v19" strokeLinecap="round" />
+      <path
+        d="M16.5 6.5c0-1.7-2-3-4.5-3s-4.5 1.3-4.5 3c0 4 9 2 9 6 0 1.7-2 3-4.5 3s-4.5-1.3-4.5-3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

@@ -28,7 +28,6 @@ export async function getClientProjections(
   period: string
 ): Promise<ClientProjectionRow[]> {
   const closed = closedMonthsForPeriod(period);
-  const mostRecentClosed = closed[closed.length - 1];
 
   const avgRows = await query<{ partner: string; cantidad: number }>(
     `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner, SUM(cantidad) as cantidad
@@ -38,21 +37,31 @@ export async function getClientProjections(
     [vendedor, producto_ref, ...closed]
   );
 
-  const priceRows = mostRecentClosed
-    ? await query<{ partner: string; cantidad: number; ingreso: number }>(
-        `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner,
+  // Unit price per client: prefer the most recent closed month they actually bought in — not
+  // necessarily the single latest month, since a client may skip a month within the 3-month window.
+  const priceRows = closed.length
+    ? await query<{ partner: string; period: string; cantidad: number; ingreso: number }>(
+        `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner, period,
                 SUM(cantidad) as cantidad, SUM(ingreso_soles) as ingreso
          FROM sales
-         WHERE vendedor = $1 AND producto_ref = $2 AND period = $3
-         GROUP BY partner`,
-        [vendedor, producto_ref, mostRecentClosed]
+         WHERE vendedor = $1 AND producto_ref = $2 AND period IN (${placeholders(closed.length, 3)})
+         GROUP BY partner, period`,
+        [vendedor, producto_ref, ...closed]
       )
     : [];
-  const priceByPartner = new Map(
-    priceRows
-      .filter((r) => Number(r.cantidad) > 0)
-      .map((r) => [r.partner, Number(r.ingreso) / Number(r.cantidad)])
-  );
+  const latestPriceByPartner = new Map<string, string>();
+  for (const row of priceRows) {
+    if (Number(row.cantidad) <= 0) continue;
+    const latest = latestPriceByPartner.get(row.partner);
+    if (!latest || row.period > latest) latestPriceByPartner.set(row.partner, row.period);
+  }
+  const priceByPartner = new Map<string, number>();
+  for (const row of priceRows) {
+    if (Number(row.cantidad) <= 0) continue;
+    if (latestPriceByPartner.get(row.partner) === row.period) {
+      priceByPartner.set(row.partner, Number(row.ingreso) / Number(row.cantidad));
+    }
+  }
 
   const savedRows = await query<{
     partner: string;
@@ -88,11 +97,12 @@ export async function getClientProjections(
 
   const result: ClientProjectionRow[] = [];
   for (const partner of partners) {
-    const promedio = (avgByPartner.get(partner) ?? 0) / denom;
+    const promedio = Math.round((avgByPartner.get(partner) ?? 0) / denom);
     const saved = savedByPartner.get(partner);
     const carry = carryByPartner.get(partner);
 
-    const proyeccion = saved?.proyeccion_cantidad ?? carry?.proyeccion_cantidad ?? (promedio > 0 ? promedio : null);
+    const proyeccion =
+      saved?.proyeccion_cantidad ?? carry?.proyeccion_cantidad ?? (promedio > 0 ? promedio : null);
     const precio = saved?.precio ?? carry?.precio ?? priceByPartner.get(partner) ?? null;
     const fijado_hasta = saved?.fijado_hasta ?? carry?.fijado_hasta ?? null;
 
@@ -148,5 +158,43 @@ export async function saveClientProjection(params: {
       params.alertAcknowledged ?? null,
       params.updatedBy,
     ]
+  );
+
+  await syncProductProjectionFromClients(
+    params.period,
+    params.vendedor,
+    params.producto_ref,
+    params.producto_nombre,
+    params.updatedBy
+  );
+}
+
+/**
+ * The product-level proyección (in `projections`) is the sum of its client-level proyecciones —
+ * recomputed here after every client edit so it never drifts out of sync.
+ */
+async function syncProductProjectionFromClients(
+  period: string,
+  vendedor: string,
+  producto_ref: string,
+  producto_nombre: string,
+  updatedBy: number
+): Promise<void> {
+  const sum = await query<{ total: number | null }>(
+    `SELECT SUM(proyeccion_cantidad) as total FROM client_projections
+     WHERE period = $1 AND vendedor = $2 AND producto_ref = $3`,
+    [period, vendedor, producto_ref]
+  );
+  const total = Number(sum[0]?.total ?? 0);
+
+  await query(
+    `INSERT INTO projections (period, vendedor, producto_ref, producto_nombre, proyeccion, is_manual, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4,$5,FALSE,$6,now())
+     ON CONFLICT (period, vendedor, producto_ref) DO UPDATE SET
+       proyeccion = excluded.proyeccion,
+       producto_nombre = excluded.producto_nombre,
+       updated_by = excluded.updated_by,
+       updated_at = now()`,
+    [period, vendedor, producto_ref, producto_nombre, total, updatedBy]
   );
 }

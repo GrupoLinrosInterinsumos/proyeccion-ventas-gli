@@ -52,10 +52,15 @@ export default function EditableProjectionCells({
         <div className="flex items-center gap-2">
           <input
             type="number"
-            inputMode="decimal"
+            inputMode="numeric"
+            step="1"
             value={proyeccion}
             onChange={(e) => setProyeccion(e.target.value)}
-            onBlur={() => persist({ proyeccion })}
+            onBlur={() => {
+              const rounded = proyeccion.trim() === "" ? "" : String(Math.round(Number(proyeccion)));
+              setProyeccion(rounded);
+              persist({ proyeccion: rounded });
+            }}
             placeholder="—"
             className="w-24 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
           />

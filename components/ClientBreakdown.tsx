@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { formatQty } from "@/lib/format";
+import { formatQty, formatUsd } from "@/lib/format";
 import { saveClientProjectionAction, acknowledgeAlertAction } from "@/app/actions";
 
 type Row = {
@@ -15,8 +15,6 @@ type Row = {
   alert_acknowledged: boolean;
   is_manual: boolean;
 };
-
-const solesFmt = new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN", maximumFractionDigits: 0 });
 
 export default function ClientBreakdown({
   vendedor,
@@ -52,6 +50,24 @@ export default function ClientBreakdown({
     load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vendedor, producto_ref, period]);
+
+  // Reload the breakdown and refresh the page so the product-level total (auto-summed from
+  // these rows) stays in sync after a client-level edit.
+  function reload() {
+    load();
+    router.refresh();
+  }
+
+  const totals = useMemo(() => {
+    if (!rows) return null;
+    return rows.reduce(
+      (acc, r) => ({
+        proyeccion: acc.proyeccion + (r.proyeccion ?? 0),
+        total: acc.total + r.total,
+      }),
+      { proyeccion: 0, total: 0 }
+    );
+  }, [rows]);
 
   return (
     <div className="bg-surface-container-low px-4 py-3">
@@ -110,10 +126,26 @@ export default function ClientBreakdown({
                     producto_nombre={producto_nombre}
                     period={period}
                     editable={editable}
-                    onSaved={load}
+                    onSaved={reload}
                   />
                 ))}
               </tbody>
+              {totals && (
+                <tfoot>
+                  <tr className="border-t border-outline-variant bg-surface-container-low font-medium">
+                    <td className="px-3 py-2 text-body-sm text-on-surface" colSpan={2}>
+                      Total producto
+                    </td>
+                    <td className="px-3 py-2 text-body-sm tabular-nums text-on-surface" colSpan={2}>
+                      {formatQty(totals.proyeccion)}
+                    </td>
+                    <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface">
+                      {formatUsd(totals.total)}
+                    </td>
+                    <td className="px-3 py-2" />
+                  </tr>
+                </tfoot>
+              )}
             </table>
           )}
         </div>
@@ -185,7 +217,10 @@ function ClientRow({
     startTransition(async () => {
       const res = await saveClientProjectionAction(fd);
       setStatus(res?.error ? "error" : "saved");
-      if (!res?.error) setTimeout(() => setStatus("idle"), 1200);
+      if (!res?.error) {
+        onSaved();
+        setTimeout(() => setStatus("idle"), 1200);
+      }
     });
   }
 
@@ -228,10 +263,15 @@ function ClientRow({
           {editable ? (
             <input
               type="number"
-              inputMode="decimal"
+              inputMode="numeric"
+              step="1"
               value={proyeccion}
               onChange={(e) => setProyeccion(e.target.value)}
-              onBlur={() => persist({ proyeccion })}
+              onBlur={() => {
+                const rounded = proyeccion.trim() === "" ? "" : String(Math.round(Number(proyeccion)));
+                setProyeccion(rounded);
+                persist({ proyeccion: rounded });
+              }}
               placeholder="—"
               className="w-20 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
             />
@@ -248,17 +288,17 @@ function ClientRow({
               value={precio}
               onChange={(e) => setPrecio(e.target.value)}
               onBlur={() => persist({ precio })}
-              placeholder="S/."
+              placeholder="US$"
               className="w-20 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
             />
           ) : (
             <span className="text-body-sm tabular-nums text-on-surface">
-              {precioNum != null ? solesFmt.format(precioNum) : "—"}
+              {precioNum != null ? formatUsd(precioNum) : "—"}
             </span>
           )}
         </td>
         <td className="px-3 py-1.5 text-right text-body-sm font-medium tabular-nums text-on-surface">
-          {solesFmt.format(total)}
+          {formatUsd(total)}
         </td>
         <td className="px-3 py-1.5">
           {editable ? (

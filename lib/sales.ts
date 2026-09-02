@@ -185,6 +185,7 @@ export type DashboardFilters = { region?: Region; vendedor?: string; q?: string;
 export type Kpis = {
   promedioTotal: number;
   proyeccionTotal: number;
+  ingresoProyectado: number;
   vendedores: number;
   productos: number;
   paresConProyeccion: number;
@@ -250,14 +251,174 @@ export async function getDashboardKpis(period: string, filters: DashboardFilters
     [...salesParams, period]
   );
 
+  // Projected revenue (USD) — the sum of each client's proyección × precio for the period.
+  const ingresoWhere: string[] = [`period = $1`, `proyeccion_cantidad IS NOT NULL`, `precio IS NOT NULL`];
+  const ingresoParams: unknown[] = [period];
+  if (filters.vendedor) {
+    ingresoWhere.push(`vendedor = $${ingresoParams.length + 1}`);
+    ingresoParams.push(filters.vendedor);
+  } else if (filters.region) {
+    ingresoWhere.push(`vendedor IN (SELECT DISTINCT vendedor FROM sales WHERE region = $${ingresoParams.length + 1})`);
+    ingresoParams.push(filters.region);
+  }
+  if (filters.categoriaN2) {
+    ingresoWhere.push(`producto_ref IN (SELECT DISTINCT producto_ref FROM sales WHERE categoria_n2 = $${ingresoParams.length + 1})`);
+    ingresoParams.push(filters.categoriaN2);
+  }
+  const ingreso = await queryOne<{ total: number | null }>(
+    `SELECT SUM(proyeccion_cantidad * precio) as total FROM client_projections WHERE ${ingresoWhere.join(" AND ")}`,
+    ingresoParams
+  );
+
   return {
     promedioTotal: Number(agg?.total ?? 0) / denom,
     proyeccionTotal: Number(proj?.total ?? 0),
+    ingresoProyectado: Number(ingreso?.total ?? 0),
     vendedores: Number(agg?.vendedores ?? 0),
     productos: Number(agg?.productos ?? 0),
     paresConProyeccion: Number(coverage?.filled ?? 0),
     paresTotal: Number(coverage?.total ?? 0),
   };
+}
+
+export type PeriodComparison = {
+  previousPeriod: string;
+  proyectado: number;
+  real: number;
+  excedido: boolean;
+};
+
+/**
+ * Compares what was projected for the most recently closed month against its actual sales
+ * (once that month's Excel has been imported) — the "did we hit our own projection" check
+ * that becomes meaningful right after month-end close.
+ */
+export async function getPeriodComparison(period: string, filters: DashboardFilters): Promise<PeriodComparison> {
+  const closed = closedMonthsForPeriod(period);
+  const previousPeriod = closed[closed.length - 1];
+
+  const salesWhere: string[] = [`period = $1`];
+  const salesParams: unknown[] = [previousPeriod];
+  const projWhere: string[] = [`period = $1`];
+  const projParams: unknown[] = [previousPeriod];
+
+  if (filters.region) {
+    salesWhere.push(`region = $${salesParams.length + 1}`);
+    salesParams.push(filters.region);
+  }
+  if (filters.vendedor) {
+    salesWhere.push(`vendedor = $${salesParams.length + 1}`);
+    salesParams.push(filters.vendedor);
+    projWhere.push(`vendedor = $${projParams.length + 1}`);
+    projParams.push(filters.vendedor);
+  } else if (filters.region) {
+    projWhere.push(`vendedor IN (SELECT DISTINCT vendedor FROM sales WHERE region = $${projParams.length + 1})`);
+    projParams.push(filters.region);
+  }
+  if (filters.categoriaN2) {
+    salesWhere.push(`categoria_n2 = $${salesParams.length + 1}`);
+    salesParams.push(filters.categoriaN2);
+    projWhere.push(`producto_ref IN (SELECT DISTINCT producto_ref FROM sales WHERE categoria_n2 = $${projParams.length + 1})`);
+    projParams.push(filters.categoriaN2);
+  }
+
+  const real = await queryOne<{ total: number | null }>(
+    `SELECT SUM(cantidad) as total FROM sales WHERE ${salesWhere.join(" AND ")}`,
+    salesParams
+  );
+  const proyectado = await queryOne<{ total: number | null }>(
+    `SELECT SUM(proyeccion) as total FROM projections WHERE ${projWhere.join(" AND ")}`,
+    projParams
+  );
+
+  const proyectadoNum = Number(proyectado?.total ?? 0);
+  const realNum = Number(real?.total ?? 0);
+
+  return {
+    previousPeriod,
+    proyectado: proyectadoNum,
+    real: realNum,
+    excedido: proyectadoNum > 0 && realNum > proyectadoNum * 2,
+  };
+}
+
+export type PeriodComparisonRow = {
+  vendedor: string;
+  producto_ref: string;
+  producto_nombre: string;
+  proyectado: number;
+  real: number;
+};
+
+/** Per vendedor+producto detail behind getPeriodComparison, for the drill-down page. */
+export async function getPeriodComparisonBreakdown(
+  previousPeriod: string,
+  filters: DashboardFilters
+): Promise<PeriodComparisonRow[]> {
+  const salesWhere: string[] = [`period = $1`];
+  const salesParams: unknown[] = [previousPeriod];
+  const projWhere: string[] = [`period = $1`];
+  const projParams: unknown[] = [previousPeriod];
+
+  if (filters.region) {
+    salesWhere.push(`region = $${salesParams.length + 1}`);
+    salesParams.push(filters.region);
+  }
+  if (filters.vendedor) {
+    salesWhere.push(`vendedor = $${salesParams.length + 1}`);
+    salesParams.push(filters.vendedor);
+    projWhere.push(`vendedor = $${projParams.length + 1}`);
+    projParams.push(filters.vendedor);
+  } else if (filters.region) {
+    projWhere.push(`vendedor IN (SELECT DISTINCT vendedor FROM sales WHERE region = $${projParams.length + 1})`);
+    projParams.push(filters.region);
+  }
+  if (filters.categoriaN2) {
+    salesWhere.push(`categoria_n2 = $${salesParams.length + 1}`);
+    salesParams.push(filters.categoriaN2);
+    projWhere.push(`producto_ref IN (SELECT DISTINCT producto_ref FROM sales WHERE categoria_n2 = $${projParams.length + 1})`);
+    projParams.push(filters.categoriaN2);
+  }
+
+  const salesRows = await query<{ vendedor: string; producto_ref: string; producto_nombre: string; total: number }>(
+    `SELECT vendedor, producto_ref, MAX(producto_nombre) as producto_nombre, SUM(cantidad) as total
+     FROM sales WHERE ${salesWhere.join(" AND ")}
+     GROUP BY vendedor, producto_ref`,
+    salesParams
+  );
+  const projRows = await query<{
+    vendedor: string;
+    producto_ref: string;
+    producto_nombre: string;
+    proyeccion: number | null;
+  }>(`SELECT vendedor, producto_ref, producto_nombre, proyeccion FROM projections WHERE ${projWhere.join(" AND ")}`, projParams);
+
+  const map = new Map<string, PeriodComparisonRow>();
+  for (const r of salesRows) {
+    map.set(`${r.vendedor}::${r.producto_ref}`, {
+      vendedor: r.vendedor,
+      producto_ref: r.producto_ref,
+      producto_nombre: r.producto_nombre,
+      proyectado: 0,
+      real: Number(r.total),
+    });
+  }
+  for (const p of projRows) {
+    const key = `${p.vendedor}::${p.producto_ref}`;
+    const existing = map.get(key);
+    const proyeccion = p.proyeccion != null ? Number(p.proyeccion) : 0;
+    if (existing) existing.proyectado = proyeccion;
+    else
+      map.set(key, {
+        vendedor: p.vendedor,
+        producto_ref: p.producto_ref,
+        producto_nombre: p.producto_nombre,
+        proyectado: proyeccion,
+        real: 0,
+      });
+  }
+
+  return [...map.values()].sort((a, b) => (b.real - b.proyectado) - (a.real - a.proyectado));
 }
 
 export type RegionSummaryRow = Kpis & { region: Region };
