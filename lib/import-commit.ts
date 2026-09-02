@@ -10,6 +10,7 @@ const SALES_COLUMNS = [
   "producto_nombre",
   "marca",
   "categoria",
+  "categoria_n2",
   "cantidad",
   "ingreso_soles",
 ] as const;
@@ -49,6 +50,7 @@ export async function commitImport(
             row.producto_nombre,
             row.marca,
             row.categoria,
+            row.categoria_n2,
             row.cantidad,
             row.ingreso_soles
           );

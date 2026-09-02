@@ -12,6 +12,7 @@ export type AggregatedSaleRow = {
   producto_nombre: string;
   marca: string;
   categoria: string;
+  categoria_n2: string;
   cantidad: number;
   ingreso_soles: number;
 };
@@ -75,6 +76,7 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     cantidad: colIndex.get("Cantidad")!,
     marca: colIndex.get("Marca"),
     categoria: colIndex.get("Categoria de Producto N1"),
+    categoriaN2: colIndex.get("Categoria de Producto N2"),
     ingreso: colIndex.get("Ingreso Total S/."),
   };
 
@@ -122,6 +124,7 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     const partner = idx.partner != null ? String(row[idx.partner]?.v ?? "").trim() : "";
     const marca = idx.marca != null ? String(row[idx.marca]?.v ?? "").trim() : "";
     const categoria = idx.categoria != null ? String(row[idx.categoria]?.v ?? "").trim() : "";
+    const categoriaN2 = idx.categoriaN2 != null ? String(row[idx.categoriaN2]?.v ?? "").trim() : "";
     const ingreso = idx.ingreso != null ? Number(row[idx.ingreso]?.v ?? 0) || 0 : 0;
     const productoNombre = cleanProductName(productoRaw);
 
@@ -140,6 +143,7 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
         producto_nombre: productoNombre,
         marca,
         categoria,
+        categoria_n2: categoriaN2,
         cantidad,
         ingreso_soles: ingreso,
       });

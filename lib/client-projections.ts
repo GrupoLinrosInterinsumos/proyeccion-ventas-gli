@@ -1,0 +1,152 @@
+import { query } from "./db";
+import { closedMonthsForPeriod } from "./period";
+
+function placeholders(count: number, start = 1): string {
+  return Array.from({ length: count }, (_, i) => `$${start + i}`).join(",");
+}
+
+export type ClientProjectionRow = {
+  partner: string;
+  promedio_mensual: number;
+  proyeccion: number | null;
+  precio: number | null;
+  total: number;
+  fijado_hasta: string | null;
+  alert_acknowledged: boolean;
+  is_manual: boolean;
+};
+
+/**
+ * Per-client rows for one vendedor+producto+period: 3-month average quantity, an editable
+ * proyección (defaults to the average), an editable price (defaults to last closed month's
+ * unit price for that client), and their product = the revenue projection. A still-active
+ * "fijado" (pinned) row from an earlier period carries its values forward automatically.
+ */
+export async function getClientProjections(
+  vendedor: string,
+  producto_ref: string,
+  period: string
+): Promise<ClientProjectionRow[]> {
+  const closed = closedMonthsForPeriod(period);
+  const mostRecentClosed = closed[closed.length - 1];
+
+  const avgRows = await query<{ partner: string; cantidad: number }>(
+    `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner, SUM(cantidad) as cantidad
+     FROM sales
+     WHERE vendedor = $1 AND producto_ref = $2 AND period IN (${placeholders(closed.length, 3)})
+     GROUP BY partner`,
+    [vendedor, producto_ref, ...closed]
+  );
+
+  const priceRows = mostRecentClosed
+    ? await query<{ partner: string; cantidad: number; ingreso: number }>(
+        `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner,
+                SUM(cantidad) as cantidad, SUM(ingreso_soles) as ingreso
+         FROM sales
+         WHERE vendedor = $1 AND producto_ref = $2 AND period = $3
+         GROUP BY partner`,
+        [vendedor, producto_ref, mostRecentClosed]
+      )
+    : [];
+  const priceByPartner = new Map(
+    priceRows
+      .filter((r) => Number(r.cantidad) > 0)
+      .map((r) => [r.partner, Number(r.ingreso) / Number(r.cantidad)])
+  );
+
+  const savedRows = await query<{
+    partner: string;
+    proyeccion_cantidad: number | null;
+    precio: number | null;
+    fijado_hasta: string | null;
+    alert_acknowledged: boolean;
+    is_manual: boolean;
+  }>(
+    `SELECT partner, proyeccion_cantidad, precio, fijado_hasta::text as fijado_hasta, alert_acknowledged,
+            (partner NOT IN (SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado')
+                              FROM sales WHERE vendedor = $1 AND producto_ref = $2)) as is_manual
+     FROM client_projections WHERE vendedor = $1 AND producto_ref = $2 AND period = $3`,
+    [vendedor, producto_ref, period]
+  );
+  const savedByPartner = new Map(savedRows.map((r) => [r.partner, r]));
+
+  // A still-active "fijado" row from an earlier period, used as a fallback default when this
+  // period has no row of its own yet.
+  const firstOfPeriod = `${period}-01`;
+  const carryRows = await query<{ partner: string; proyeccion_cantidad: number | null; precio: number | null; fijado_hasta: string | null }>(
+    `SELECT DISTINCT ON (partner) partner, proyeccion_cantidad, precio, fijado_hasta::text as fijado_hasta
+     FROM client_projections
+     WHERE vendedor = $1 AND producto_ref = $2 AND fijado_hasta IS NOT NULL AND fijado_hasta >= $3::date
+     ORDER BY partner, updated_at DESC`,
+    [vendedor, producto_ref, firstOfPeriod]
+  );
+  const carryByPartner = new Map(carryRows.map((r) => [r.partner, r]));
+
+  const partners = new Set<string>([...avgRows.map((r) => r.partner), ...savedByPartner.keys()]);
+  const avgByPartner = new Map(avgRows.map((r) => [r.partner, Number(r.cantidad)]));
+  const denom = Math.max(closed.length, 1);
+
+  const result: ClientProjectionRow[] = [];
+  for (const partner of partners) {
+    const promedio = (avgByPartner.get(partner) ?? 0) / denom;
+    const saved = savedByPartner.get(partner);
+    const carry = carryByPartner.get(partner);
+
+    const proyeccion = saved?.proyeccion_cantidad ?? carry?.proyeccion_cantidad ?? (promedio > 0 ? promedio : null);
+    const precio = saved?.precio ?? carry?.precio ?? priceByPartner.get(partner) ?? null;
+    const fijado_hasta = saved?.fijado_hasta ?? carry?.fijado_hasta ?? null;
+
+    result.push({
+      partner,
+      promedio_mensual: promedio,
+      proyeccion,
+      precio,
+      total: proyeccion != null && precio != null ? proyeccion * precio : 0,
+      fijado_hasta,
+      alert_acknowledged: saved?.alert_acknowledged ?? false,
+      is_manual: saved?.is_manual ?? promedio === 0,
+    });
+  }
+
+  result.sort((a, b) => b.promedio_mensual - a.promedio_mensual);
+  return result;
+}
+
+export async function saveClientProjection(params: {
+  period: string;
+  vendedor: string;
+  producto_ref: string;
+  producto_nombre: string;
+  partner: string;
+  proyeccion: number | null;
+  precio: number | null;
+  fijado_hasta: string | null;
+  alertAcknowledged?: boolean;
+  updatedBy: number;
+}): Promise<void> {
+  await query(
+    `INSERT INTO client_projections
+       (period, vendedor, producto_ref, producto_nombre, partner, proyeccion_cantidad, precio, fijado_hasta, alert_acknowledged, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9, FALSE),$10,now())
+     ON CONFLICT (period, vendedor, producto_ref, partner) DO UPDATE SET
+       proyeccion_cantidad = excluded.proyeccion_cantidad,
+       precio = excluded.precio,
+       fijado_hasta = excluded.fijado_hasta,
+       alert_acknowledged = CASE WHEN $9 IS NULL THEN client_projections.alert_acknowledged ELSE excluded.alert_acknowledged END,
+       producto_nombre = excluded.producto_nombre,
+       updated_by = excluded.updated_by,
+       updated_at = now()`,
+    [
+      params.period,
+      params.vendedor,
+      params.producto_ref,
+      params.producto_nombre,
+      params.partner,
+      params.proyeccion,
+      params.precio,
+      params.fijado_hasta,
+      params.alertAcknowledged ?? null,
+      params.updatedBy,
+    ]
+  );
+}

@@ -10,12 +10,18 @@ export default function DashboardFilters({
   region,
   vendedor,
   q,
+  categoriaN2,
+  period,
   vendedorOptions,
+  categoriaN2Options,
 }: {
   region: Region | "";
   vendedor: string;
   q: string;
+  categoriaN2: string;
+  period: string;
   vendedorOptions: VendedorOption[];
+  categoriaN2Options: string[];
 }) {
   const router = useRouter();
   const [search, setSearch] = useState(q);
@@ -23,14 +29,17 @@ export default function DashboardFilters({
 
   useEffect(() => setSearch(q), [q]);
 
-  function go(next: { region?: string; vendedor?: string; q?: string }) {
+  function go(next: { region?: string; vendedor?: string; q?: string; categoriaN2?: string }) {
     const params = new URLSearchParams();
     const nextRegion = next.region ?? region;
     const nextVendedor = next.vendedor ?? vendedor;
     const nextQ = next.q ?? q;
+    const nextCategoriaN2 = next.categoriaN2 ?? categoriaN2;
+    if (period) params.set("period", period);
     if (nextRegion) params.set("region", nextRegion);
     if (nextVendedor) params.set("vendedor", nextVendedor);
     if (nextQ) params.set("q", nextQ);
+    if (nextCategoriaN2) params.set("categoriaN2", nextCategoriaN2);
     router.push(`/dashboard${params.toString() ? `?${params}` : ""}`);
   }
 
@@ -84,11 +93,24 @@ export default function DashboardFilters({
         ))}
       </select>
 
-      {(region || vendedor || q) && (
+      <select
+        value={categoriaN2}
+        onChange={(e) => go({ categoriaN2: e.target.value })}
+        className="rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-body-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+      >
+        <option value="">Todas las categorías</option>
+        {categoriaN2Options.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </select>
+
+      {(region || vendedor || q || categoriaN2) && (
         <button
           onClick={() => {
             setSearch("");
-            router.push("/dashboard");
+            router.push(period ? `/dashboard?period=${period}` : "/dashboard");
           }}
           className="rounded-md px-3 py-2 text-body-sm text-on-surface-variant hover:bg-surface-container-high"
         >

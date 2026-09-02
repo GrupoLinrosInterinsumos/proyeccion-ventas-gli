@@ -13,15 +13,18 @@ export default function VendorSection({
   rows,
   defaultOpen = true,
   editable = true,
+  searchable = false,
 }: {
   period: string;
   vendedor: string;
   rows: ProductRow[];
   defaultOpen?: boolean;
   editable?: boolean;
+  searchable?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
   const totals = useMemo(
     () => ({
@@ -31,6 +34,14 @@ export default function VendorSection({
     }),
     [rows]
   );
+
+  const visibleRows = useMemo(() => {
+    if (!search.trim()) return rows;
+    const q = search.trim().toLowerCase();
+    return rows.filter(
+      (r) => r.producto_nombre.toLowerCase().includes(q) || r.producto_ref.toLowerCase().includes(q)
+    );
+  }, [rows, search]);
 
   return (
     <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
@@ -78,9 +89,17 @@ export default function VendorSection({
 
       {open && (
         <div className="border-t border-outline-variant">
-          {editable && (
-            <div className="border-b border-outline-variant bg-surface-container-low px-4 py-2.5">
-              <AddProductForm vendedor={vendedor} />
+          {(editable || searchable) && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-outline-variant bg-surface-container-low px-4 py-2.5">
+              {editable && <AddProductForm vendedor={vendedor} />}
+              {searchable && (
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Buscar producto…"
+                  className="ml-auto w-56 rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+              )}
             </div>
           )}
           <div className="thin-scroll overflow-x-auto">
@@ -103,7 +122,7 @@ export default function VendorSection({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => {
+                {visibleRows.map((row) => {
                   const key = row.producto_ref;
                   const isOpen = expanded === key;
                   return (
@@ -163,7 +182,13 @@ export default function VendorSection({
                       {isOpen && (
                         <tr className="border-b border-outline-variant last:border-b-0">
                           <td colSpan={5} className="p-0">
-                            <ClientBreakdown vendedor={vendedor} producto_ref={row.producto_ref} />
+                            <ClientBreakdown
+                              vendedor={vendedor}
+                              producto_ref={row.producto_ref}
+                              producto_nombre={row.producto_nombre}
+                              period={period}
+                              editable={editable}
+                            />
                           </td>
                         </tr>
                       )}

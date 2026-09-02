@@ -9,9 +9,10 @@ import {
   getVendorProductTable,
   getVendorSummaryForRegion,
   listVendedores,
+  listCategoriaN2,
 } from "@/lib/sales";
 import { searchVendedores, type UserListRow } from "@/lib/users";
-import { currentProjectionPeriod, lastClosedMonths, periodLabel } from "@/lib/period";
+import { openProjectionPeriod, closedMonthsForPeriod, periodLabel, periodStatus } from "@/lib/period";
 import { isRegion, REGION_LABELS, type Region } from "@/lib/regions";
 import { formatPercent, formatQty } from "@/lib/format";
 import TopNav from "@/components/TopNav";
@@ -22,26 +23,38 @@ import ProductBreakdownCard from "@/components/ProductBreakdownCard";
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ region?: string; vendedor?: string; q?: string }>;
+  searchParams: Promise<{ region?: string; vendedor?: string; q?: string; categoriaN2?: string; period?: string }>;
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (!session.isAdmin) redirect("/ventas");
 
   const params = await searchParams;
-  const region: Region | "" = isRegion(params.region) ? params.region : "";
-  const vendedor = params.vendedor?.trim() || "";
-  const q = params.q?.trim() || "";
+  const isAdmin = session.isAdmin;
 
-  const period = currentProjectionPeriod();
-  const closed = lastClosedMonths(3);
+  const open = openProjectionPeriod();
+  const requestedPeriod = params.period?.trim() || open;
+  const period = periodStatus(requestedPeriod) === "future" ? open : requestedPeriod;
+  const closed = closedMonthsForPeriod(period);
 
-  const allVendedores = await listVendedores();
+  // Non-admins are locked to their own scope — no filter picking, no cross-vendedor browsing.
+  const region: Region | "" = isAdmin ? (isRegion(params.region) ? params.region : "") : session.region ?? "";
+  const vendedor = isAdmin ? params.vendedor?.trim() || "" : session.vendedor ?? "";
+  const q = isAdmin ? params.q?.trim() || "" : "";
+  const categoriaN2 = isAdmin ? params.categoriaN2?.trim() || "" : "";
+
+  const [allVendedores, categoriaN2Options] = await Promise.all([
+    isAdmin ? listVendedores() : Promise.resolve([]),
+    isAdmin ? listCategoriaN2() : Promise.resolve([]),
+  ]);
   const vendedorOptions = allVendedores
     .filter((v) => !region || v.region === region)
     .map((v) => ({ vendedor: v.vendedor, name: v.name }));
 
-  const kpis = await getDashboardKpis(period, { region: region || undefined, vendedor: vendedor || undefined });
+  const kpis = await getDashboardKpis(period, {
+    region: region || undefined,
+    vendedor: vendedor || undefined,
+    categoriaN2: categoriaN2 || undefined,
+  });
 
   return (
     <div className="min-h-screen bg-surface-container-low">
@@ -50,14 +63,41 @@ export default async function DashboardPage({
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-label-md uppercase tracking-wide text-on-surface-variant">
-              Resumen general &middot; Proyección de {periodLabel(period)}
+              {isAdmin ? "Resumen general" : "Mi resumen"} &middot; Proyección de {periodLabel(period)}
+              {periodStatus(period) !== "open" && (
+                <span className="ml-2 rounded bg-surface-container-high px-1.5 py-0.5 normal-case text-on-surface-variant">
+                  Cerrada · histórico
+                </span>
+              )}
             </p>
             <h1 className="text-headline-md text-on-surface">Dashboard</h1>
             <p className="mt-1 text-body-sm text-on-surface-variant">
               Promedios calculados sobre {closed.map(periodLabel).join(" · ")}
             </p>
           </div>
-          <DashboardFilters region={region} vendedor={vendedor} q={q} vendedorOptions={vendedorOptions} />
+          {isAdmin && (
+            <div className="flex flex-wrap items-center gap-2">
+              <DashboardFilters
+                region={region}
+                vendedor={vendedor}
+                q={q}
+                categoriaN2={categoriaN2}
+                period={period}
+                vendedorOptions={vendedorOptions}
+                categoriaN2Options={categoriaN2Options}
+              />
+              <a
+                href={`/api/export?period=${period}`}
+                className="flex h-touch items-center gap-1.5 rounded-md border border-outline-variant bg-surface-container-lowest px-3 text-body-sm font-medium text-on-surface hover:bg-surface-container-high"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 3v13m0 0-4-4m4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M4 19h16" strokeLinecap="round" />
+                </svg>
+                Descargar Excel
+              </a>
+            </div>
+          )}
         </div>
 
         <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -91,11 +131,17 @@ export default async function DashboardPage({
         </div>
 
         {vendedor ? (
-          <VendorDrilldown vendedor={vendedor} period={period} />
+          <VendorDrilldown vendedor={vendedor} period={period} isOwn={!isAdmin} />
         ) : q ? (
-          <SearchResultsSection q={q} region={region || undefined} period={period} />
+          <SearchResultsSection q={q} region={region || undefined} categoriaN2={categoriaN2} period={period} />
         ) : region ? (
-          <VendorSummarySection region={region} period={period} />
+          <VendorSummarySection region={region} categoriaN2={categoriaN2} period={period} />
+        ) : categoriaN2 ? (
+          <ProductBreakdownCard
+            products={await getProductBreakdown(period, { categoriaN2 }, 30)}
+            period={period}
+            title={`Por producto · ${categoriaN2}`}
+          />
         ) : (
           <RegionSummarySection period={period} />
         )}
@@ -104,7 +150,7 @@ export default async function DashboardPage({
   );
 }
 
-async function VendorDrilldown({ vendedor, period }: { vendedor: string; period: string }) {
+async function VendorDrilldown({ vendedor, period, isOwn }: { vendedor: string; period: string; isOwn: boolean }) {
   const rows = await getVendorProductTable(vendedor, period);
   return (
     <div className="mt-8">
@@ -115,10 +161,12 @@ async function VendorDrilldown({ vendedor, period }: { vendedor: string; period:
           </p>
         </div>
       ) : (
-        <VendorSection period={period} vendedor={vendedor} rows={rows} defaultOpen editable={false} />
+        <VendorSection period={period} vendedor={vendedor} rows={rows} defaultOpen editable={false} searchable={rows.length > 15} />
       )}
       <p className="mt-3 text-body-sm text-on-surface-variant">
-        Vista de solo lectura. Cada vendedor gestiona su propia proyección y observaciones.
+        {isOwn
+          ? "Vista de solo lectura — para editar tu proyección ve a “Mi proyección” en el menú."
+          : "Vista de solo lectura. Cada vendedor gestiona su propia proyección y observaciones."}
       </p>
     </div>
   );
@@ -127,15 +175,17 @@ async function VendorDrilldown({ vendedor, period }: { vendedor: string; period:
 async function SearchResultsSection({
   q,
   region,
+  categoriaN2,
   period,
 }: {
   q: string;
   region?: Region;
+  categoriaN2?: string;
   period: string;
 }) {
   const [vendorMatches, productMatches] = await Promise.all([
     searchVendedores(q, region),
-    getProductBreakdown(period, { region, q }, 30),
+    getProductBreakdown(period, { region, q, categoriaN2 }, 30),
   ]);
 
   return (
@@ -149,10 +199,10 @@ async function SearchResultsSection({
           <p className="px-5 py-6 text-body-sm text-on-surface-variant">Sin coincidencias.</p>
         ) : (
           <div className="flex flex-wrap gap-2 p-5">
-            {vendorMatches.map((v: UserListRow) => (
+            {vendorMatches.filter((v) => v.vendedor).map((v: UserListRow) => (
               <Link
                 key={v.id}
-                href={`/dashboard?vendedor=${encodeURIComponent(v.vendedor)}`}
+                href={`/dashboard?vendedor=${encodeURIComponent(v.vendedor!)}`}
                 className="flex items-center gap-2 rounded-full border border-outline-variant bg-surface-container-low px-3 py-1.5 text-body-sm text-on-surface transition-colors hover:border-primary hover:text-primary"
               >
                 {v.name}
@@ -170,9 +220,17 @@ async function SearchResultsSection({
   );
 }
 
-async function VendorSummarySection({ region, period }: { region: Region; period: string }) {
+async function VendorSummarySection({
+  region,
+  categoriaN2,
+  period,
+}: {
+  region: Region;
+  categoriaN2?: string;
+  period: string;
+}) {
   const rows = await getVendorSummaryForRegion(region, period);
-  const products = await getProductBreakdown(period, { region }, 10);
+  const products = await getProductBreakdown(period, { region, categoriaN2 }, 10);
 
   return (
     <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">

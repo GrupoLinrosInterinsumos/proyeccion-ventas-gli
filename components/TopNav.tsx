@@ -6,12 +6,14 @@ import { REGION_LABELS } from "@/lib/regions";
 import GliLogo from "./GliLogo";
 
 export default function TopNav({ session, active }: { session: SessionUser; active: string }) {
-  const links = [{ href: "/ventas", label: "Mi proyección" }];
+  const links: { href: string; label: string }[] = [];
+  if (session.vendedor) links.push({ href: "/ventas", label: "Mi proyección" });
+  links.push({ href: "/dashboard", label: "Dashboard" });
   if (session.isAdmin) {
-    links.push({ href: "/dashboard", label: "Dashboard general" });
     links.push({ href: "/importar", label: "Importar data" });
     links.push({ href: "/usuarios", label: "Usuarios" });
   }
+  const homeHref = session.vendedor ? "/ventas" : "/dashboard";
 
   return (
     <header className="relative overflow-hidden bg-primary shadow-md">
@@ -28,7 +30,7 @@ export default function TopNav({ session, active }: { session: SessionUser; acti
 
       <div className="relative mx-auto flex max-w-container items-center justify-between gap-6 px-margin-mobile py-3 md:px-margin-desktop">
         <div className="flex items-center gap-8">
-          <Link href="/ventas">
+          <Link href={homeHref}>
             <GliLogo variant="onDark" height={30} />
           </Link>
           <nav className="flex items-center gap-1">
@@ -52,7 +54,8 @@ export default function TopNav({ session, active }: { session: SessionUser; acti
           <div className="hidden text-right sm:block">
             <p className="text-body-sm font-medium text-on-primary leading-tight">{session.name}</p>
             <p className="text-label-sm uppercase tracking-wide text-primary-fixed/70 leading-tight">
-              {session.isAdmin ? "Administrador" : session.region ? REGION_LABELS[session.region] : ""}
+              {session.isSpot ? "Venta Spot" : session.isAdmin ? "Administrador" : ""}
+              {session.region ? `${session.isSpot || session.isAdmin ? " · " : ""}${REGION_LABELS[session.region]}` : ""}
             </p>
           </div>
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary text-on-secondary text-label-md ring-2 ring-white/15">

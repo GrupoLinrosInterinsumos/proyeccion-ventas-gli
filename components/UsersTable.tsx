@@ -47,18 +47,24 @@ export default function UsersTable({
               <tr key={u.id} className="border-b border-outline-variant last:border-b-0 hover:bg-surface-container-low">
                 <td className="px-5 py-3 text-body-sm font-medium text-on-surface">{u.name}</td>
                 <td className="px-5 py-3 text-body-sm text-on-surface-variant">{u.email}</td>
-                <td className="px-5 py-3 text-body-sm text-on-surface-variant">{u.vendedor}</td>
+                <td className="px-5 py-3 text-body-sm text-on-surface-variant">{u.vendedor ?? "—"}</td>
                 <td className="px-5 py-3 text-body-sm text-on-surface-variant">
                   {u.region ? REGION_LABELS[u.region] : "—"}
                 </td>
                 <td className="px-5 py-3">
-                  {u.is_admin ? (
-                    <span className="rounded bg-secondary-fixed px-1.5 py-0.5 text-label-sm font-medium text-on-secondary-fixed-variant">
-                      Administrador
-                    </span>
-                  ) : (
-                    <span className="text-label-sm text-on-surface-variant">Vendedor</span>
-                  )}
+                  <div className="flex flex-wrap gap-1">
+                    {u.is_admin && (
+                      <span className="rounded bg-secondary-fixed px-1.5 py-0.5 text-label-sm font-medium text-on-secondary-fixed-variant">
+                        Administrador
+                      </span>
+                    )}
+                    {u.is_spot && (
+                      <span className="rounded bg-tertiary-fixed px-1.5 py-0.5 text-label-sm font-medium text-on-tertiary-fixed-variant">
+                        Venta Spot
+                      </span>
+                    )}
+                    {!u.is_admin && !u.is_spot && <span className="text-label-sm text-on-surface-variant">Vendedor</span>}
+                  </div>
                 </td>
                 <td className="px-5 py-3">
                   <div className="flex items-center justify-end gap-1">
@@ -123,12 +129,11 @@ function EditUserRow({
                 className="w-full rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
             </EditField>
-            <EditField label="Vendedor (nombre exacto del Excel)">
+            <EditField label="Vendedor (nombre exacto del Excel)" hint="Vacío solo si es admin sin proyección propia.">
               <input
                 name="vendedor"
-                required
                 list={`unclaimed-vendedores-${user.id}`}
-                defaultValue={user.vendedor}
+                defaultValue={user.vendedor ?? ""}
                 className="w-full rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-body-sm uppercase outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
               <datalist id={`unclaimed-vendedores-${user.id}`}>
@@ -140,13 +145,10 @@ function EditUserRow({
             <EditField label="Región">
               <select
                 name="region"
-                required
                 defaultValue={user.region ?? ""}
                 className="w-full rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               >
-                <option value="" disabled>
-                  Selecciona una región
-                </option>
+                <option value="">Sin región (solo admin)</option>
                 {REGIONS.map((r) => (
                   <option key={r} value={r}>
                     {REGION_LABELS[r]}
@@ -162,17 +164,31 @@ function EditUserRow({
                 className="w-full rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
             </EditField>
-            <div className="flex items-center gap-2 self-end pb-2">
-              <input
-                id={`is_admin-${user.id}`}
-                name="is_admin"
-                type="checkbox"
-                defaultChecked={user.is_admin}
-                className="h-4 w-4 rounded border-outline-variant"
-              />
-              <label htmlFor={`is_admin-${user.id}`} className="text-body-sm text-on-surface">
-                Es administrador
-              </label>
+            <div className="flex flex-col justify-end gap-2 pb-2">
+              <div className="flex items-center gap-2">
+                <input
+                  id={`is_admin-${user.id}`}
+                  name="is_admin"
+                  type="checkbox"
+                  defaultChecked={user.is_admin}
+                  className="h-4 w-4 rounded border-outline-variant"
+                />
+                <label htmlFor={`is_admin-${user.id}`} className="text-body-sm text-on-surface">
+                  Es administrador
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id={`is_spot-${user.id}`}
+                  name="is_spot"
+                  type="checkbox"
+                  defaultChecked={user.is_spot}
+                  className="h-4 w-4 rounded border-outline-variant"
+                />
+                <label htmlFor={`is_spot-${user.id}`} className="text-body-sm text-on-surface">
+                  Venta Spot
+                </label>
+              </div>
             </div>
           </div>
 

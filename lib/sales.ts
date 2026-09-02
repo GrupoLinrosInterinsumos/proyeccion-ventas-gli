@@ -1,5 +1,6 @@
 import { query, queryOne } from "./db";
-import { lastClosedMonths } from "./period";
+import { closedMonthsForPeriod } from "./period";
+import { productFamilyKey, parseSizeGrams } from "./product-family";
 import type { Region } from "./regions";
 
 function placeholders(count: number, start = 1): string {
@@ -30,7 +31,7 @@ export async function getVendorProductTable(
   vendedor: string,
   projectionPeriod: string
 ): Promise<ProductRow[]> {
-  const closed = lastClosedMonths(3);
+  const closed = closedMonthsForPeriod(projectionPeriod);
   const denom = Math.max(await uploadedPeriodsCount(closed), 1);
 
   const salesRows = await query<{
@@ -91,22 +92,46 @@ export async function getVendorProductTable(
   return rows;
 }
 
-export type ClientBreakdownRow = { partner: string; cantidad: number };
-
-export async function getClientBreakdown(
-  vendedor: string,
-  producto_ref: string
-): Promise<ClientBreakdownRow[]> {
-  const closed = lastClosedMonths(3);
-  const rows = await query<{ partner: string; cantidad: number }>(
-    `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner, SUM(cantidad) as cantidad
-     FROM sales
-     WHERE vendedor = $1 AND producto_ref = $2 AND period IN (${placeholders(closed.length, 3)})
-     GROUP BY partner
-     ORDER BY SUM(cantidad) DESC`,
-    [vendedor, producto_ref, ...closed]
+/**
+ * For a "Venta Spot" account with no sales history of its own: the entire product catalog,
+ * so they can add a proyección for whatever comes up, rather than only the (empty) list of
+ * things they've personally sold.
+ */
+export async function getFullCatalogProductTable(vendedor: string, projectionPeriod: string): Promise<ProductRow[]> {
+  const catalogRows = await query<{ producto_ref: string; producto_nombre: string }>(
+    `SELECT producto_ref, MAX(producto_nombre) as producto_nombre FROM sales GROUP BY producto_ref`
   );
-  return rows.map((r) => ({ partner: r.partner, cantidad: Number(r.cantidad) }));
+
+  const projRows = await query<{
+    producto_ref: string;
+    producto_nombre: string;
+    proyeccion: number | null;
+    observaciones: string | null;
+  }>(`SELECT producto_ref, producto_nombre, proyeccion, observaciones FROM projections WHERE vendedor = $1 AND period = $2`, [
+    vendedor,
+    projectionPeriod,
+  ]);
+  const projByRef = new Map(projRows.map((p) => [p.producto_ref, p]));
+
+  const rows: ProductRow[] = catalogRows.map((c) => {
+    const proj = projByRef.get(c.producto_ref);
+    return {
+      producto_ref: c.producto_ref,
+      producto_nombre: c.producto_nombre,
+      cantidad_total: 0,
+      promedio_mensual: 0,
+      proyeccion: proj?.proyeccion != null ? Number(proj.proyeccion) : null,
+      observaciones: proj?.observaciones ?? null,
+      is_manual: false,
+    };
+  });
+
+  // Prioritize items that already have a proyección set, then fall back to alphabetical.
+  rows.sort((a, b) => {
+    if ((a.proyeccion !== null) !== (b.proyeccion !== null)) return a.proyeccion !== null ? -1 : 1;
+    return a.producto_nombre.localeCompare(b.producto_nombre, "es");
+  });
+  return rows;
 }
 
 export type ProductVendorRow = {
@@ -122,7 +147,7 @@ export async function getProductVendorBreakdown(
   period: string,
   region?: Region
 ): Promise<ProductVendorRow[]> {
-  const closed = lastClosedMonths(3);
+  const closed = closedMonthsForPeriod(period);
   const denom = Math.max(await uploadedPeriodsCount(closed), 1);
 
   const where: string[] = [`producto_ref = $1`, `period IN (${placeholders(closed.length, 2)})`];
@@ -155,7 +180,7 @@ export async function getProductVendorBreakdown(
   }));
 }
 
-export type DashboardFilters = { region?: Region; vendedor?: string; q?: string };
+export type DashboardFilters = { region?: Region; vendedor?: string; q?: string; categoriaN2?: string };
 
 export type Kpis = {
   promedioTotal: number;
@@ -167,7 +192,7 @@ export type Kpis = {
 };
 
 export async function getDashboardKpis(period: string, filters: DashboardFilters): Promise<Kpis> {
-  const closed = lastClosedMonths(3);
+  const closed = closedMonthsForPeriod(period);
   const denom = Math.max(await uploadedPeriodsCount(closed), 1);
 
   const salesWhere: string[] = [`period IN (${placeholders(closed.length, 1)})`];
@@ -190,6 +215,14 @@ export async function getDashboardKpis(period: string, filters: DashboardFilters
       `vendedor IN (SELECT DISTINCT vendedor FROM sales WHERE region = $${projParams.length + 1})`
     );
     projParams.push(filters.region);
+  }
+  if (filters.categoriaN2) {
+    salesWhere.push(`categoria_n2 = $${salesParams.length + 1}`);
+    salesParams.push(filters.categoriaN2);
+    projWhere.push(
+      `producto_ref IN (SELECT DISTINCT producto_ref FROM sales WHERE categoria_n2 = $${projParams.length + 1})`
+    );
+    projParams.push(filters.categoriaN2);
   }
 
   const agg = await queryOne<{
@@ -251,7 +284,7 @@ export async function getVendorSummaryForRegion(
   region: Region,
   period: string
 ): Promise<VendorSummaryRow[]> {
-  const closed = lastClosedMonths(3);
+  const closed = closedMonthsForPeriod(period);
   const denom = Math.max(await uploadedPeriodsCount(closed), 1);
 
   const salesRows = await query<{ vendedor: string; producto_ref: string; total: number }>(
@@ -291,22 +324,29 @@ export async function getVendorSummaryForRegion(
 }
 
 export type ProductBreakdownRow = {
+  /** Representative ref (largest package in the family) — use `producto_refs` for querying. */
   producto_ref: string;
+  producto_refs: string[];
   producto_nombre: string;
   categoria: string | null;
+  categoria_n2: string | null;
   marca: string | null;
   cantidad_total: number;
   promedio_mensual: number;
   vendedores: number;
 };
 
-/** Ranked product table (desc by 3-month avg qty), optionally scoped by region/vendedor/search text. */
+/**
+ * Ranked product table (desc by 3-month avg qty), optionally scoped by region/vendedor/search
+ * text/categoria_n2. Package-size variants of the same item (e.g. ACEK1-061-001/005/025) are
+ * summed into one row here — dashboard-only, /ventas keeps them separate.
+ */
 export async function getProductBreakdown(
   period: string,
   filters: DashboardFilters,
   limit = 12
 ): Promise<ProductBreakdownRow[]> {
-  const closed = lastClosedMonths(3);
+  const closed = closedMonthsForPeriod(period);
   const denom = Math.max(await uploadedPeriodsCount(closed), 1);
 
   const where: string[] = [`period IN (${placeholders(closed.length, 1)})`];
@@ -319,42 +359,89 @@ export async function getProductBreakdown(
     where.push(`vendedor = $${params.length + 1}`);
     params.push(filters.vendedor);
   }
+  if (filters.categoriaN2) {
+    where.push(`categoria_n2 = $${params.length + 1}`);
+    params.push(filters.categoriaN2);
+  }
   if (filters.q) {
     where.push(`(producto_nombre ILIKE $${params.length + 1} OR producto_ref ILIKE $${params.length + 1})`);
     params.push(`%${filters.q}%`);
   }
-  params.push(limit);
 
   const rows = await query<{
     producto_ref: string;
+    vendedor: string;
     producto_nombre: string;
     categoria: string | null;
+    categoria_n2: string | null;
     marca: string | null;
     total: number;
-    vendedores: number;
   }>(
-    `SELECT producto_ref,
+    `SELECT producto_ref, vendedor,
             MAX(producto_nombre) as producto_nombre,
             MAX(NULLIF(categoria, '')) as categoria,
+            MAX(NULLIF(categoria_n2, '')) as categoria_n2,
             MAX(NULLIF(marca, '')) as marca,
-            SUM(cantidad) as total,
-            COUNT(DISTINCT vendedor) as vendedores
+            SUM(cantidad) as total
      FROM sales WHERE ${where.join(" AND ")}
-     GROUP BY producto_ref
-     ORDER BY total DESC
-     LIMIT $${params.length}`,
+     GROUP BY producto_ref, vendedor`,
     params
   );
 
-  return rows.map((r) => ({
-    producto_ref: r.producto_ref,
-    producto_nombre: r.producto_nombre,
-    categoria: r.categoria,
-    marca: r.marca,
-    cantidad_total: Number(r.total),
-    promedio_mensual: Number(r.total) / denom,
-    vendedores: Number(r.vendedores),
-  }));
+  type Family = {
+    key: string;
+    variants: Map<string, { producto_nombre: string; categoria: string | null; categoria_n2: string | null; marca: string | null; total: number }>;
+    vendedores: Set<string>;
+    total: number;
+  };
+  const families = new Map<string, Family>();
+
+  for (const r of rows) {
+    const key = productFamilyKey(r.producto_ref);
+    const fam = families.get(key) ?? { key, variants: new Map(), vendedores: new Set(), total: 0 };
+    fam.vendedores.add(r.vendedor);
+    fam.total += Number(r.total);
+    const variant = fam.variants.get(r.producto_ref);
+    if (variant) variant.total += Number(r.total);
+    else
+      fam.variants.set(r.producto_ref, {
+        producto_nombre: r.producto_nombre,
+        categoria: r.categoria,
+        categoria_n2: r.categoria_n2,
+        marca: r.marca,
+        total: Number(r.total),
+      });
+    families.set(key, fam);
+  }
+
+  const result: ProductBreakdownRow[] = [];
+  for (const fam of families.values()) {
+    let bestRef = "";
+    let bestVariant = { producto_nombre: "", categoria: null as string | null, categoria_n2: null as string | null, marca: null as string | null, total: 0 };
+    let bestSize = -1;
+    for (const [ref, variant] of fam.variants) {
+      const size = parseSizeGrams(variant.producto_nombre);
+      if (size > bestSize) {
+        bestSize = size;
+        bestRef = ref;
+        bestVariant = variant;
+      }
+    }
+    result.push({
+      producto_ref: bestRef,
+      producto_refs: [...fam.variants.keys()],
+      producto_nombre: bestVariant.producto_nombre,
+      categoria: bestVariant.categoria,
+      categoria_n2: bestVariant.categoria_n2,
+      marca: bestVariant.marca,
+      cantidad_total: fam.total,
+      vendedores: fam.vendedores.size,
+      promedio_mensual: fam.total / denom,
+    });
+  }
+
+  result.sort((a, b) => b.cantidad_total - a.cantidad_total);
+  return result.slice(0, limit);
 }
 
 export type DirectoryUser = { vendedor: string; region: Region | null; name: string };
@@ -364,6 +451,13 @@ export async function listVendedores(): Promise<DirectoryUser[]> {
     `SELECT vendedor, region, name FROM users ORDER BY name`
   );
   return rows;
+}
+
+export async function listCategoriaN2(): Promise<string[]> {
+  const rows = await query<{ categoria_n2: string }>(
+    `SELECT DISTINCT categoria_n2 FROM sales WHERE categoria_n2 IS NOT NULL AND categoria_n2 != '' ORDER BY categoria_n2`
+  );
+  return rows.map((r) => r.categoria_n2);
 }
 
 export async function listImports() {

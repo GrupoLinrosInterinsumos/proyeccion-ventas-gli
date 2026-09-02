@@ -38,10 +38,12 @@ export default function AddUserForm({ unclaimedVendedores }: { unclaimedVendedor
             className="w-full rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </Field>
-        <Field label="Vendedor (nombre exacto del Excel)" hint="Debe coincidir tal cual con la columna Vendedor del reporte.">
+        <Field
+          label="Vendedor (nombre exacto del Excel)"
+          hint="Debe coincidir tal cual con la columna Vendedor del reporte. Déjalo vacío solo si es un administrador sin proyección propia."
+        >
           <input
             name="vendedor"
-            required
             list="unclaimed-vendedores"
             placeholder="Ej. JORGE SALAZAR"
             className="w-full rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-body-sm uppercase outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
@@ -55,13 +57,10 @@ export default function AddUserForm({ unclaimedVendedores }: { unclaimedVendedor
         <Field label="Región">
           <select
             name="region"
-            required
             defaultValue=""
             className="w-full rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
           >
-            <option value="" disabled>
-              Selecciona una región
-            </option>
+            <option value="">Sin región (solo admin)</option>
             {REGIONS.map((r) => (
               <option key={r} value={r}>
                 {REGION_LABELS[r]}
@@ -77,11 +76,19 @@ export default function AddUserForm({ unclaimedVendedores }: { unclaimedVendedor
             className="w-full rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </Field>
-        <div className="flex items-center gap-2 self-end pb-2">
-          <input id="is_admin" name="is_admin" type="checkbox" className="h-4 w-4 rounded border-outline-variant" />
-          <label htmlFor="is_admin" className="text-body-sm text-on-surface">
-            Es administrador (dashboard general + importar data)
-          </label>
+        <div className="flex flex-col justify-end gap-2 pb-2">
+          <div className="flex items-center gap-2">
+            <input id="is_admin" name="is_admin" type="checkbox" className="h-4 w-4 rounded border-outline-variant" />
+            <label htmlFor="is_admin" className="text-body-sm text-on-surface">
+              Es administrador (dashboard, importar data, usuarios)
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <input id="is_spot" name="is_spot" type="checkbox" className="h-4 w-4 rounded border-outline-variant" />
+            <label htmlFor="is_spot" className="text-body-sm text-on-surface">
+              Venta Spot (sin historial, ve el catálogo completo)
+            </label>
+          </div>
         </div>
       </div>
 

@@ -11,9 +11,11 @@ export type SessionUser = {
   id: number;
   name: string;
   email: string;
-  vendedor: string;
+  /** Null only for an admin account with no personal projection of their own. */
+  vendedor: string | null;
   region: Region | null;
   isAdmin: boolean;
+  isSpot: boolean;
 };
 
 export type UserRow = {
@@ -21,9 +23,10 @@ export type UserRow = {
   name: string;
   email: string;
   password_hash: string;
-  vendedor: string;
+  vendedor: string | null;
   region: Region | null;
   is_admin: boolean;
+  is_spot: boolean;
 };
 
 export async function findUserByEmail(email: string): Promise<UserRow | undefined> {
@@ -38,6 +41,7 @@ export async function createSessionCookie(user: UserRow) {
     vendedor: user.vendedor,
     region: user.region,
     isAdmin: user.is_admin,
+    isSpot: user.is_spot,
   })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()

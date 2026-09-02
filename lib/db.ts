@@ -15,9 +15,10 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
-  vendedor TEXT NOT NULL UNIQUE,
+  vendedor TEXT UNIQUE,
   region TEXT CHECK (region IN ('LIMA','AREQUIPA','TRUJILLO')),
   is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  is_spot BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS sales (
   producto_nombre TEXT NOT NULL,
   marca TEXT,
   categoria TEXT,
+  categoria_n2 TEXT,
   cantidad DOUBLE PRECISION NOT NULL DEFAULT 0,
   ingreso_soles DOUBLE PRECISION NOT NULL DEFAULT 0
 );
@@ -56,10 +58,34 @@ CREATE TABLE IF NOT EXISTS projections (
   proyeccion DOUBLE PRECISION,
   observaciones TEXT,
   is_manual BOOLEAN NOT NULL DEFAULT FALSE,
+  fijado_hasta DATE,
   updated_by INTEGER REFERENCES users(id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (period, vendedor, producto_ref)
 );
+
+CREATE TABLE IF NOT EXISTS client_projections (
+  id SERIAL PRIMARY KEY,
+  period TEXT NOT NULL,
+  vendedor TEXT NOT NULL,
+  producto_ref TEXT NOT NULL,
+  producto_nombre TEXT NOT NULL,
+  partner TEXT NOT NULL,
+  proyeccion_cantidad DOUBLE PRECISION,
+  precio DOUBLE PRECISION,
+  fijado_hasta DATE,
+  alert_acknowledged BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (period, vendedor, producto_ref, partner)
+);
+CREATE INDEX IF NOT EXISTS idx_client_projections_lookup ON client_projections (vendedor, producto_ref, period);
+
+-- Idempotent migrations for tables that already existed before these columns were added.
+ALTER TABLE users ALTER COLUMN vendedor DROP NOT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_spot BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS categoria_n2 TEXT;
+ALTER TABLE projections ADD COLUMN IF NOT EXISTS fijado_hasta DATE;
 `;
 
 async function createClient(): Promise<Client> {
