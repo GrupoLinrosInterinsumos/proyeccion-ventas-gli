@@ -9,7 +9,6 @@ import {
   getVendorProductTable,
   getVendorSummaryForRegion,
   listVendedores,
-  type ProductBreakdownRow,
 } from "@/lib/sales";
 import { searchVendedores, type UserListRow } from "@/lib/users";
 import { currentProjectionPeriod, lastClosedMonths, periodLabel } from "@/lib/period";
@@ -18,6 +17,7 @@ import { formatPercent, formatQty } from "@/lib/format";
 import TopNav from "@/components/TopNav";
 import DashboardFilters from "@/components/DashboardFilters";
 import VendorSection from "@/components/VendorSection";
+import ProductBreakdownCard from "@/components/ProductBreakdownCard";
 
 export default async function DashboardPage({
   searchParams,
@@ -165,7 +165,7 @@ async function SearchResultsSection({
         )}
       </section>
 
-      <ProductBreakdownCard products={productMatches} title={`Productos · "${q}"`} />
+      <ProductBreakdownCard products={productMatches} period={period} region={region} title={`Productos · "${q}"`} />
     </div>
   );
 }
@@ -243,7 +243,7 @@ async function VendorSummarySection({ region, period }: { region: Region; period
           </table>
         </div>
       </section>
-      <ProductBreakdownCard products={products} />
+      <ProductBreakdownCard products={products} period={period} region={region} />
     </div>
   );
 }
@@ -322,56 +322,8 @@ async function RegionSummarySection({ period }: { period: string }) {
           </table>
         </div>
       </section>
-      <ProductBreakdownCard products={products} />
+      <ProductBreakdownCard products={products} period={period} />
     </div>
-  );
-}
-
-function ProductBreakdownCard({
-  products,
-  title = "Por producto",
-}: {
-  products: ProductBreakdownRow[];
-  title?: string;
-}) {
-  const max = Math.max(...products.map((p) => p.promedio_mensual), 1);
-  return (
-    <section className="rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
-      <h2 className="flex items-center gap-2.5 border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
-        <span className="h-2 w-2 rounded-full bg-tertiary" aria-hidden />
-        {title}
-      </h2>
-      {products.length === 0 ? (
-        <p className="px-5 py-6 text-body-sm text-on-surface-variant">Sin datos para este filtro.</p>
-      ) : (
-        <ul className="flex flex-col divide-y divide-outline-variant">
-          {products.map((p) => (
-            <li key={p.producto_ref} className="px-5 py-3">
-              <div className="mb-1 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-body-sm font-medium text-on-surface">{p.producto_nombre}</p>
-                  <p className="truncate text-label-sm text-on-surface-variant">
-                    {p.categoria ?? "Sin categoría"}
-                    {p.marca ? ` · ${p.marca}` : ""} · {p.vendedores} vendedor{p.vendedores === 1 ? "" : "es"}
-                  </p>
-                </div>
-                <div className="shrink-0 text-right">
-                  <p className="text-body-sm font-semibold tabular-nums text-on-surface">
-                    {formatQty(p.promedio_mensual)}
-                  </p>
-                </div>
-              </div>
-              <span className="block h-1.5 overflow-hidden rounded-full bg-surface-container-highest">
-                <span
-                  className="block h-full rounded-full bg-tertiary"
-                  style={{ width: `${(p.promedio_mensual / max) * 100}%` }}
-                />
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
   );
 }
 

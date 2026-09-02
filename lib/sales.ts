@@ -109,6 +109,52 @@ export async function getClientBreakdown(
   return rows.map((r) => ({ partner: r.partner, cantidad: Number(r.cantidad) }));
 }
 
+export type ProductVendorRow = {
+  vendedor: string;
+  region: Region;
+  promedio_mensual: number;
+  proyeccion: number | null;
+};
+
+/** For one product: which vendedores sell it, their 3-month avg qty, and this month's proyección. */
+export async function getProductVendorBreakdown(
+  producto_ref: string,
+  period: string,
+  region?: Region
+): Promise<ProductVendorRow[]> {
+  const closed = lastClosedMonths(3);
+  const denom = Math.max(await uploadedPeriodsCount(closed), 1);
+
+  const where: string[] = [`producto_ref = $1`, `period IN (${placeholders(closed.length, 2)})`];
+  const params: unknown[] = [producto_ref, ...closed];
+  if (region) {
+    where.push(`region = $${params.length + 1}`);
+    params.push(region);
+  }
+
+  const salesRows = await query<{ vendedor: string; region: Region; total: number }>(
+    `SELECT vendedor, MAX(region) as region, SUM(cantidad) as total
+     FROM sales WHERE ${where.join(" AND ")}
+     GROUP BY vendedor
+     ORDER BY total DESC`,
+    params
+  );
+
+  const projRows = await query<{ vendedor: string; proyeccion: number | null }>(
+    `SELECT vendedor, proyeccion FROM projections WHERE producto_ref = $1 AND period = $2`,
+    [producto_ref, period]
+  );
+  const projByVendedor = new Map(projRows.map((p) => [p.vendedor, p.proyeccion]));
+
+  return salesRows.map((r) => ({
+    vendedor: r.vendedor,
+    region: r.region,
+    promedio_mensual: Number(r.total) / denom,
+    proyeccion:
+      projByVendedor.get(r.vendedor) != null ? Number(projByVendedor.get(r.vendedor)) : null,
+  }));
+}
+
 export type DashboardFilters = { region?: Region; vendedor?: string; q?: string };
 
 export type Kpis = {
