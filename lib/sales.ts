@@ -109,7 +109,7 @@ export async function getClientBreakdown(
   return rows.map((r) => ({ partner: r.partner, cantidad: Number(r.cantidad) }));
 }
 
-export type DashboardFilters = { region?: Region; vendedor?: string };
+export type DashboardFilters = { region?: Region; vendedor?: string; q?: string };
 
 export type Kpis = {
   promedioTotal: number;
@@ -254,7 +254,7 @@ export type ProductBreakdownRow = {
   vendedores: number;
 };
 
-/** Ranked product table (desc by 3-month avg qty), optionally scoped by region/vendedor. */
+/** Ranked product table (desc by 3-month avg qty), optionally scoped by region/vendedor/search text. */
 export async function getProductBreakdown(
   period: string,
   filters: DashboardFilters,
@@ -272,6 +272,10 @@ export async function getProductBreakdown(
   if (filters.vendedor) {
     where.push(`vendedor = $${params.length + 1}`);
     params.push(filters.vendedor);
+  }
+  if (filters.q) {
+    where.push(`(producto_nombre ILIKE $${params.length + 1} OR producto_ref ILIKE $${params.length + 1})`);
+    params.push(`%${filters.q}%`);
   }
   params.push(limit);
 

@@ -24,6 +24,21 @@ export async function countAdmins(): Promise<number> {
   return row?.count ?? 0;
 }
 
+export async function searchVendedores(q: string, region?: Region): Promise<UserListRow[]> {
+  const params: unknown[] = [`%${q}%`];
+  let where = `(name ILIKE $1 OR vendedor ILIKE $1)`;
+  if (region) {
+    params.push(region);
+    where += ` AND region = $2`;
+  }
+  return query<UserListRow>(
+    `SELECT id, name, email, vendedor, region, is_admin, created_at FROM users
+     WHERE ${where}
+     ORDER BY name`,
+    params
+  );
+}
+
 /** Vendedores with sales history but no login yet — useful to suggest when adding a user. */
 export async function getUnclaimedVendedores(): Promise<string[]> {
   const rows = await query<{ vendedor: string }>(

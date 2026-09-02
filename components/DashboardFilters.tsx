@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { REGIONS, REGION_LABELS, type Region } from "@/lib/regions";
 
@@ -8,25 +9,54 @@ export type VendedorOption = { vendedor: string; name: string };
 export default function DashboardFilters({
   region,
   vendedor,
+  q,
   vendedorOptions,
 }: {
   region: Region | "";
   vendedor: string;
+  q: string;
   vendedorOptions: VendedorOption[];
 }) {
   const router = useRouter();
+  const [search, setSearch] = useState(q);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function go(next: { region?: string; vendedor?: string }) {
+  useEffect(() => setSearch(q), [q]);
+
+  function go(next: { region?: string; vendedor?: string; q?: string }) {
     const params = new URLSearchParams();
     const nextRegion = next.region ?? region;
     const nextVendedor = next.vendedor ?? vendedor;
+    const nextQ = next.q ?? q;
     if (nextRegion) params.set("region", nextRegion);
     if (nextVendedor) params.set("vendedor", nextVendedor);
+    if (nextQ) params.set("q", nextQ);
     router.push(`/dashboard${params.toString() ? `?${params}` : ""}`);
+  }
+
+  function onSearchChange(value: string) {
+    setSearch(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => go({ q: value }), 350);
   }
 
   return (
     <div className="flex flex-wrap items-center gap-2">
+      <div className="relative">
+        <span className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-on-surface-variant">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" strokeLinecap="round" />
+          </svg>
+        </span>
+        <input
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Buscar producto o vendedor…"
+          className="w-56 rounded-md border border-outline-variant bg-surface-container-lowest py-2 pl-8 pr-3 text-body-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+        />
+      </div>
+
       <select
         value={region}
         onChange={(e) => go({ region: e.target.value, vendedor: "" })}
@@ -54,9 +84,12 @@ export default function DashboardFilters({
         ))}
       </select>
 
-      {(region || vendedor) && (
+      {(region || vendedor || q) && (
         <button
-          onClick={() => router.push("/dashboard")}
+          onClick={() => {
+            setSearch("");
+            router.push("/dashboard");
+          }}
           className="rounded-md px-3 py-2 text-body-sm text-on-surface-variant hover:bg-surface-container-high"
         >
           Limpiar filtros

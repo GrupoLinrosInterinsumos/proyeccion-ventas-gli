@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import {
@@ -10,6 +11,7 @@ import {
   listVendedores,
   type ProductBreakdownRow,
 } from "@/lib/sales";
+import { searchVendedores, type UserListRow } from "@/lib/users";
 import { currentProjectionPeriod, lastClosedMonths, periodLabel } from "@/lib/period";
 import { isRegion, REGION_LABELS, type Region } from "@/lib/regions";
 import { formatPercent, formatQty } from "@/lib/format";
@@ -20,7 +22,7 @@ import VendorSection from "@/components/VendorSection";
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ region?: string; vendedor?: string }>;
+  searchParams: Promise<{ region?: string; vendedor?: string; q?: string }>;
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
@@ -29,6 +31,7 @@ export default async function DashboardPage({
   const params = await searchParams;
   const region: Region | "" = isRegion(params.region) ? params.region : "";
   const vendedor = params.vendedor?.trim() || "";
+  const q = params.q?.trim() || "";
 
   const period = currentProjectionPeriod();
   const closed = lastClosedMonths(3);
@@ -54,7 +57,7 @@ export default async function DashboardPage({
               Promedios calculados sobre {closed.map(periodLabel).join(" · ")}
             </p>
           </div>
-          <DashboardFilters region={region} vendedor={vendedor} vendedorOptions={vendedorOptions} />
+          <DashboardFilters region={region} vendedor={vendedor} q={q} vendedorOptions={vendedorOptions} />
         </div>
 
         <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -89,6 +92,8 @@ export default async function DashboardPage({
 
         {vendedor ? (
           <VendorDrilldown vendedor={vendedor} period={period} />
+        ) : q ? (
+          <SearchResultsSection q={q} region={region || undefined} period={period} />
         ) : region ? (
           <VendorSummarySection region={region} period={period} />
         ) : (
@@ -115,6 +120,52 @@ async function VendorDrilldown({ vendedor, period }: { vendedor: string; period:
       <p className="mt-3 text-body-sm text-on-surface-variant">
         Vista de solo lectura. Cada vendedor gestiona su propia proyección y observaciones.
       </p>
+    </div>
+  );
+}
+
+async function SearchResultsSection({
+  q,
+  region,
+  period,
+}: {
+  q: string;
+  region?: Region;
+  period: string;
+}) {
+  const [vendorMatches, productMatches] = await Promise.all([
+    searchVendedores(q, region),
+    getProductBreakdown(period, { region, q }, 30),
+  ]);
+
+  return (
+    <div className="mt-8 flex flex-col gap-6">
+      <section className="rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
+        <h2 className="flex items-center gap-2.5 border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
+          <span className="h-2 w-2 rounded-full bg-primary" aria-hidden />
+          Vendedores &middot; &quot;{q}&quot;
+        </h2>
+        {vendorMatches.length === 0 ? (
+          <p className="px-5 py-6 text-body-sm text-on-surface-variant">Sin coincidencias.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2 p-5">
+            {vendorMatches.map((v: UserListRow) => (
+              <Link
+                key={v.id}
+                href={`/dashboard?vendedor=${encodeURIComponent(v.vendedor)}`}
+                className="flex items-center gap-2 rounded-full border border-outline-variant bg-surface-container-low px-3 py-1.5 text-body-sm text-on-surface transition-colors hover:border-primary hover:text-primary"
+              >
+                {v.name}
+                {v.region && (
+                  <span className="text-label-sm text-on-surface-variant">{REGION_LABELS[v.region]}</span>
+                )}
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <ProductBreakdownCard products={productMatches} title={`Productos · "${q}"`} />
     </div>
   );
 }
@@ -276,13 +327,19 @@ async function RegionSummarySection({ period }: { period: string }) {
   );
 }
 
-function ProductBreakdownCard({ products }: { products: ProductBreakdownRow[] }) {
+function ProductBreakdownCard({
+  products,
+  title = "Por producto",
+}: {
+  products: ProductBreakdownRow[];
+  title?: string;
+}) {
   const max = Math.max(...products.map((p) => p.promedio_mensual), 1);
   return (
     <section className="rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
       <h2 className="flex items-center gap-2.5 border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
         <span className="h-2 w-2 rounded-full bg-tertiary" aria-hidden />
-        Por producto
+        {title}
       </h2>
       {products.length === 0 ? (
         <p className="px-5 py-6 text-body-sm text-on-surface-variant">Sin datos para este filtro.</p>
