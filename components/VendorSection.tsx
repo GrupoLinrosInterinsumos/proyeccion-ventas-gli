@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { formatQty, initials } from "@/lib/format";
+import { formatQty, formatUsd, initials } from "@/lib/format";
 import type { ProductRow } from "@/lib/sales";
 import EditableProjectionCells from "./EditableProjectionCells";
 import ClientBreakdown from "./ClientBreakdown";
@@ -25,23 +25,34 @@ export default function VendorSection({
   const [open, setOpen] = useState(defaultOpen);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [categoriaN2, setCategoriaN2] = useState("");
 
   const totals = useMemo(
     () => ({
       promedio: rows.reduce((s, r) => s + r.promedio_mensual, 0),
       proyeccion: rows.reduce((s, r) => s + (r.proyeccion ?? 0), 0),
+      ingreso: rows.reduce((s, r) => s + r.ingreso_proyectado, 0),
       pendientes: rows.filter((r) => r.proyeccion === null).length,
     }),
     [rows]
   );
 
+  const categoriaOptions = useMemo(
+    () => [...new Set(rows.map((r) => r.categoria_n2).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b, "es")),
+    [rows]
+  );
+
   const visibleRows = useMemo(() => {
-    if (!search.trim()) return rows;
+    let list = rows;
+    if (categoriaN2) list = list.filter((r) => r.categoria_n2 === categoriaN2);
     const q = search.trim().toLowerCase();
-    return rows.filter(
-      (r) => r.producto_nombre.toLowerCase().includes(q) || r.producto_ref.toLowerCase().includes(q)
-    );
-  }, [rows, search]);
+    if (q) {
+      list = list.filter(
+        (r) => r.producto_nombre.toLowerCase().includes(q) || r.producto_ref.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [rows, search, categoriaN2]);
 
   return (
     <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
@@ -78,6 +89,12 @@ export default function VendorSection({
               {formatQty(totals.proyeccion)}
             </p>
           </div>
+          <div className="text-right">
+            <p className="text-label-sm uppercase tracking-wide text-on-surface-variant">Proyección (USD)</p>
+            <p className="text-body-md font-semibold tabular-nums text-primary">
+              {formatUsd(totals.ingreso)}
+            </p>
+          </div>
           <span
             className={`text-on-surface-variant transition-transform ${open ? "rotate-180" : ""}`}
             aria-hidden
@@ -92,12 +109,28 @@ export default function VendorSection({
           {(editable || searchable) && (
             <div className="flex flex-wrap items-center gap-2 border-b border-outline-variant bg-surface-container-low px-4 py-2.5">
               {editable && <AddProductForm vendedor={vendedor} />}
+              {searchable && categoriaOptions.length > 1 && (
+                <select
+                  value={categoriaN2}
+                  onChange={(e) => setCategoriaN2(e.target.value)}
+                  className="ml-auto rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                >
+                  <option value="">Todas las categorías</option>
+                  {categoriaOptions.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              )}
               {searchable && (
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Buscar producto…"
-                  className="ml-auto w-56 rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  className={`w-56 rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 ${
+                    categoriaOptions.length > 1 ? "" : "ml-auto"
+                  }`}
                 />
               )}
             </div>
@@ -166,11 +199,17 @@ export default function VendorSection({
                             initialProyeccion={row.proyeccion}
                             initialObservaciones={row.observaciones}
                             promedio={row.promedio_mensual}
+                            ingresoProyectado={row.ingreso_proyectado}
                           />
                         ) : (
                           <>
                             <td className="px-3 py-2 text-body-sm tabular-nums text-on-surface">
                               {row.proyeccion !== null ? formatQty(row.proyeccion) : "—"}
+                              {row.ingreso_proyectado > 0 && (
+                                <p className="text-label-sm font-normal text-on-surface-variant">
+                                  {formatUsd(row.ingreso_proyectado)}
+                                </p>
+                              )}
                             </td>
                             <td className="px-3 py-2 text-body-sm text-on-surface-variant">
                               {row.observaciones || "—"}

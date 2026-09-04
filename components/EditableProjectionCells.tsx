@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { saveProjectionAction } from "@/app/actions";
+import { formatUsd } from "@/lib/format";
 
 export default function EditableProjectionCells({
   period,
@@ -11,6 +12,7 @@ export default function EditableProjectionCells({
   initialProyeccion,
   initialObservaciones,
   promedio,
+  ingresoProyectado,
 }: {
   period: string;
   vendedor: string;
@@ -19,6 +21,7 @@ export default function EditableProjectionCells({
   initialProyeccion: number | null;
   initialObservaciones: string | null;
   promedio: number;
+  ingresoProyectado: number;
 }) {
   const [proyeccion, setProyeccion] = useState(initialProyeccion?.toString() ?? "");
   const [observaciones, setObservaciones] = useState(initialObservaciones ?? "");
@@ -78,6 +81,9 @@ export default function EditableProjectionCells({
             </span>
           )}
         </div>
+        {ingresoProyectado > 0 && (
+          <p className="mt-0.5 text-label-sm text-on-surface-variant">{formatUsd(ingresoProyectado)}</p>
+        )}
       </td>
       <td className="px-3 py-2">
         <input

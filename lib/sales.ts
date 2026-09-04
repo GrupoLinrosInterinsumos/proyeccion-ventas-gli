@@ -19,12 +19,26 @@ async function uploadedPeriodsCount(periods: string[]): Promise<number> {
 export type ProductRow = {
   producto_ref: string;
   producto_nombre: string;
+  categoria_n2: string | null;
   cantidad_total: number;
   promedio_mensual: number;
   proyeccion: number | null;
+  ingreso_proyectado: number;
   observaciones: string | null;
   is_manual: boolean;
 };
+
+/** Per producto_ref: sum of proyección × precio across its clients (USD), for one vendedor+period. */
+async function revenueByProduct(period: string, vendedor: string): Promise<Map<string, number>> {
+  const rows = await query<{ producto_ref: string; total: number }>(
+    `SELECT producto_ref, SUM(proyeccion_cantidad * precio) as total
+     FROM client_projections
+     WHERE period = $1 AND vendedor = $2 AND proyeccion_cantidad IS NOT NULL AND precio IS NOT NULL
+     GROUP BY producto_ref`,
+    [period, vendedor]
+  );
+  return new Map(rows.map((r) => [r.producto_ref, Number(r.total)]));
+}
 
 /** Flat, ordered (desc by 3-month avg) product table for a single vendedor. */
 export async function getVendorProductTable(
@@ -37,12 +51,14 @@ export async function getVendorProductTable(
   const salesRows = await query<{
     producto_ref: string;
     producto_nombre: string;
+    categoria_n2: string | null;
     total: number;
   }>(
-    `SELECT producto_ref, producto_nombre, SUM(cantidad) as total
+    `SELECT producto_ref, MAX(producto_nombre) as producto_nombre,
+            MAX(NULLIF(categoria_n2, '')) as categoria_n2, SUM(cantidad) as total
      FROM sales
      WHERE vendedor = $1 AND period IN (${placeholders(closed.length, 2)})
-     GROUP BY producto_ref, producto_nombre`,
+     GROUP BY producto_ref`,
     [vendedor, ...closed]
   );
 
@@ -57,6 +73,7 @@ export async function getVendorProductTable(
      FROM projections WHERE vendedor = $1 AND period = $2`,
     [vendedor, projectionPeriod]
   );
+  const revenueByRef = await revenueByProduct(projectionPeriod, vendedor);
 
   const projByRef = new Map(projRows.map((p) => [p.producto_ref, p]));
   const rows: ProductRow[] = [];
@@ -67,9 +84,11 @@ export async function getVendorProductTable(
     rows.push({
       producto_ref: row.producto_ref,
       producto_nombre: row.producto_nombre,
+      categoria_n2: row.categoria_n2,
       cantidad_total: Number(row.total),
       promedio_mensual: Number(row.total) / denom,
       proyeccion: proj?.proyeccion != null ? Number(proj.proyeccion) : null,
+      ingreso_proyectado: revenueByRef.get(row.producto_ref) ?? 0,
       observaciones: proj?.observaciones ?? null,
       is_manual: false,
     });
@@ -80,9 +99,11 @@ export async function getVendorProductTable(
     rows.push({
       producto_ref: proj.producto_ref,
       producto_nombre: proj.producto_nombre,
+      categoria_n2: null,
       cantidad_total: 0,
       promedio_mensual: 0,
       proyeccion: proj.proyeccion != null ? Number(proj.proyeccion) : null,
+      ingreso_proyectado: revenueByRef.get(proj.producto_ref) ?? 0,
       observaciones: proj.observaciones,
       is_manual: true,
     });
@@ -130,8 +151,9 @@ async function materializeDefaultProjections(
  * things they've personally sold.
  */
 export async function getFullCatalogProductTable(vendedor: string, projectionPeriod: string): Promise<ProductRow[]> {
-  const catalogRows = await query<{ producto_ref: string; producto_nombre: string }>(
-    `SELECT producto_ref, MAX(producto_nombre) as producto_nombre FROM sales GROUP BY producto_ref`
+  const catalogRows = await query<{ producto_ref: string; producto_nombre: string; categoria_n2: string | null }>(
+    `SELECT producto_ref, MAX(producto_nombre) as producto_nombre, MAX(NULLIF(categoria_n2, '')) as categoria_n2
+     FROM sales GROUP BY producto_ref`
   );
 
   const projRows = await query<{
@@ -144,15 +166,18 @@ export async function getFullCatalogProductTable(vendedor: string, projectionPer
     projectionPeriod,
   ]);
   const projByRef = new Map(projRows.map((p) => [p.producto_ref, p]));
+  const revenueByRef = await revenueByProduct(projectionPeriod, vendedor);
 
   const rows: ProductRow[] = catalogRows.map((c) => {
     const proj = projByRef.get(c.producto_ref);
     return {
       producto_ref: c.producto_ref,
       producto_nombre: c.producto_nombre,
+      categoria_n2: c.categoria_n2,
       cantidad_total: 0,
       promedio_mensual: 0,
       proyeccion: proj?.proyeccion != null ? Number(proj.proyeccion) : null,
+      ingreso_proyectado: revenueByRef.get(c.producto_ref) ?? 0,
       observaciones: proj?.observaciones ?? null,
       is_manual: false,
     };
