@@ -1,5 +1,5 @@
 import { query, queryOne } from "./db";
-import { closedMonthsForPeriod } from "./period";
+import { closedMonthsForPeriod, periodStatus } from "./period";
 import { productFamilyKey, parseSizeGrams } from "./product-family";
 import type { Region } from "./regions";
 
@@ -89,7 +89,39 @@ export async function getVendorProductTable(
   }
 
   rows.sort((a, b) => b.promedio_mensual - a.promedio_mensual);
+
+  // A product with no proyección yet defaults (for display) to its own 3-month average — the
+  // same rule client rows use. Persist that default now so it's already there when nobody has
+  // touched anything: dashboard totals, exports and coverage all read from `projections`.
+  if (periodStatus(projectionPeriod) === "open") {
+    const toDefault = rows.filter((r) => r.proyeccion === null && r.promedio_mensual > 0);
+    if (toDefault.length > 0) {
+      await materializeDefaultProjections(projectionPeriod, vendedor, toDefault);
+      for (const r of toDefault) r.proyeccion = Math.round(r.promedio_mensual);
+    }
+  }
+
   return rows;
+}
+
+async function materializeDefaultProjections(
+  period: string,
+  vendedor: string,
+  rows: { producto_ref: string; producto_nombre: string; promedio_mensual: number }[]
+): Promise<void> {
+  const params: unknown[] = [period, vendedor];
+  const tuples: string[] = [];
+  for (const r of rows) {
+    const base = params.length;
+    tuples.push(`($1,$2,$${base + 1},$${base + 2},$${base + 3},FALSE,now())`);
+    params.push(r.producto_ref, r.producto_nombre, Math.round(r.promedio_mensual));
+  }
+  await query(
+    `INSERT INTO projections (period, vendedor, producto_ref, producto_nombre, proyeccion, is_manual, updated_at)
+     VALUES ${tuples.join(",")}
+     ON CONFLICT (period, vendedor, producto_ref) DO NOTHING`,
+    params
+  );
 }
 
 /**

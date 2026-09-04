@@ -1,5 +1,5 @@
-import { query } from "./db";
-import { closedMonthsForPeriod } from "./period";
+import { query, queryOne } from "./db";
+import { closedMonthsForPeriod, periodStatus } from "./period";
 
 function placeholders(count: number, start = 1): string {
   return Array.from({ length: count }, (_, i) => `$${start + i}`).join(",");
@@ -96,6 +96,7 @@ export async function getClientProjections(
   const denom = Math.max(closed.length, 1);
 
   const result: ClientProjectionRow[] = [];
+  const freshDefaults: { partner: string; proyeccion: number | null; precio: number | null; fijado_hasta: string | null }[] = [];
   for (const partner of partners) {
     const promedio = Math.round((avgByPartner.get(partner) ?? 0) / denom);
     const saved = savedByPartner.get(partner);
@@ -105,6 +106,12 @@ export async function getClientProjections(
       saved?.proyeccion_cantidad ?? carry?.proyeccion_cantidad ?? (promedio > 0 ? promedio : null);
     const precio = saved?.precio ?? carry?.precio ?? priceByPartner.get(partner) ?? null;
     const fijado_hasta = saved?.fijado_hasta ?? carry?.fijado_hasta ?? null;
+
+    // Nothing saved for this partner yet this period — the row shown is a computed default.
+    // Persist it now so totals/exports/dashboard reflect it without requiring an explicit edit.
+    if (!saved && (proyeccion !== null || precio !== null || fijado_hasta !== null)) {
+      freshDefaults.push({ partner, proyeccion, precio, fijado_hasta });
+    }
 
     result.push({
       partner,
@@ -118,8 +125,49 @@ export async function getClientProjections(
     });
   }
 
+  if (freshDefaults.length > 0 && periodStatus(period) === "open") {
+    const nameRow =
+      (await queryOne<{ producto_nombre: string }>(
+        `SELECT producto_nombre FROM sales WHERE vendedor = $1 AND producto_ref = $2 LIMIT 1`,
+        [vendedor, producto_ref]
+      )) ??
+      (await queryOne<{ producto_nombre: string }>(
+        `SELECT producto_nombre FROM projections WHERE vendedor = $1 AND producto_ref = $2 LIMIT 1`,
+        [vendedor, producto_ref]
+      ));
+    const producto_nombre = nameRow?.producto_nombre ?? producto_ref;
+    await materializeClientDefaults(period, vendedor, producto_ref, producto_nombre, freshDefaults);
+  }
+
   result.sort((a, b) => b.promedio_mensual - a.promedio_mensual);
   return result;
+}
+
+/** Persists computed default rows (never explicitly saved) so they become real, queryable data. */
+async function materializeClientDefaults(
+  period: string,
+  vendedor: string,
+  producto_ref: string,
+  producto_nombre: string,
+  defaults: { partner: string; proyeccion: number | null; precio: number | null; fijado_hasta: string | null }[]
+): Promise<void> {
+  const params: unknown[] = [period, vendedor, producto_ref, producto_nombre];
+  const tuples: string[] = [];
+  for (const d of defaults) {
+    const base = params.length;
+    tuples.push(`($1,$2,$3,$4,$${base + 1},$${base + 2},$${base + 3},$${base + 4},now())`);
+    params.push(d.partner, d.proyeccion, d.precio, d.fijado_hasta);
+  }
+
+  await query(
+    `INSERT INTO client_projections
+       (period, vendedor, producto_ref, producto_nombre, partner, proyeccion_cantidad, precio, fijado_hasta, updated_at)
+     VALUES ${tuples.join(",")}
+     ON CONFLICT (period, vendedor, producto_ref, partner) DO NOTHING`,
+    params
+  );
+
+  await syncProductProjectionFromClients(period, vendedor, producto_ref, producto_nombre, null);
 }
 
 export async function saveClientProjection(params: {
@@ -178,7 +226,7 @@ async function syncProductProjectionFromClients(
   vendedor: string,
   producto_ref: string,
   producto_nombre: string,
-  updatedBy: number
+  updatedBy: number | null
 ): Promise<void> {
   const sum = await query<{ total: number | null }>(
     `SELECT SUM(proyeccion_cantidad) as total FROM client_projections
