@@ -37,6 +37,17 @@ function cleanProductName(raw: string): string {
   return raw.replace(/^\[[^\]]*\]\s*/, "").trim();
 }
 
+/** Strips accents/case/extra whitespace so a header like "Categoría  de Producto N2" still
+ * matches "Categoria de Producto N2" — real export files are inconsistent about this. */
+function normalizeHeader(h: string): string {
+  return h
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 type Cell = { v?: unknown } | undefined;
 
 export function parseSalesWorkbook(buffer: Buffer): ParseResult {
@@ -54,12 +65,32 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
 
   const headerRow = sheet[range.s.r] ?? [];
   const colIndex = new Map<string, number>();
+  const normColIndex = new Map<string, number>();
   for (let c = range.s.c; c <= range.e.c; c++) {
     const v = headerRow[c]?.v;
-    if (typeof v === "string" && v.trim()) colIndex.set(v.trim(), c);
+    if (typeof v === "string" && v.trim()) {
+      const trimmed = v.trim();
+      colIndex.set(trimmed, c);
+      const normalized = normalizeHeader(trimmed);
+      if (!normColIndex.has(normalized)) normColIndex.set(normalized, c);
+    }
+  }
+  // Exact match first, then accent/case/whitespace-insensitive — real export files are
+  // inconsistent about accents ("Categoría" vs "Categoria") and stray spaces in headers.
+  function findColumn(name: string): number | undefined {
+    return colIndex.get(name) ?? normColIndex.get(normalizeHeader(name));
+  }
+  // Tries each candidate name in order — used where the column has been renamed over time
+  // and older exported files may still use the previous header.
+  function findColumnAny(...names: string[]): number | undefined {
+    for (const name of names) {
+      const found = findColumn(name);
+      if (found !== undefined) return found;
+    }
+    return undefined;
   }
 
-  const missing = REQUIRED_COLUMNS.filter((c) => !colIndex.has(c));
+  const missing = REQUIRED_COLUMNS.filter((c) => findColumn(c) === undefined);
   if (missing.length > 0) {
     throw new Error(
       `Faltan columnas requeridas en la hoja "${sheetName}": ${missing.join(", ")}`
@@ -67,17 +98,17 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
   }
 
   const idx = {
-    fecha: colIndex.get("Fecha")!,
-    vendedor: colIndex.get("Vendedor")!,
-    equipo: colIndex.get("Equipo Vendedor")!,
-    partner: colIndex.get("Partner"),
-    ref: colIndex.get("Referencia Interna")!,
-    producto: colIndex.get("Producto")!,
-    cantidad: colIndex.get("Cantidad")!,
-    marca: colIndex.get("Marca"),
-    categoria: colIndex.get("Categoria de Producto N1"),
-    categoriaN2: colIndex.get("Categoria de Producto N2"),
-    ingreso: colIndex.get("Ingreso Total S/."),
+    fecha: findColumn("Fecha")!,
+    vendedor: findColumn("Vendedor")!,
+    equipo: findColumn("Equipo Vendedor")!,
+    partner: findColumn("Partner"),
+    ref: findColumn("Referencia Interna")!,
+    producto: findColumn("Producto")!,
+    cantidad: findColumn("Cantidad")!,
+    marca: findColumn("Marca"),
+    categoria: findColumn("Categoria de Producto N1"),
+    categoriaN2: findColumnAny("Categoria N2", "Categoria de Producto N2"),
+    ingreso: findColumnAny("Ingreso Total $", "Ingreso Total S/."),
   };
 
   const aggregated = new Map<string, AggregatedSaleRow>();

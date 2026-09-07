@@ -106,10 +106,10 @@ export default function VendorSection({
 
       {open && (
         <div className="border-t border-outline-variant">
-          {(editable || searchable) && (
+          {(editable || searchable || categoriaOptions.length > 1) && (
             <div className="flex flex-wrap items-center gap-2 border-b border-outline-variant bg-surface-container-low px-4 py-2.5">
               {editable && <AddProductForm vendedor={vendedor} />}
-              {searchable && categoriaOptions.length > 1 && (
+              {categoriaOptions.length > 1 && (
                 <select
                   value={categoriaN2}
                   onChange={(e) => setCategoriaN2(e.target.value)}
