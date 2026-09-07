@@ -14,6 +14,7 @@ export default function DashboardFilters({
   period,
   vendedorOptions,
   categoriaN2Options,
+  variant = "full",
 }: {
   region: Region | "";
   vendedor: string;
@@ -22,6 +23,8 @@ export default function DashboardFilters({
   period: string;
   vendedorOptions: VendedorOption[];
   categoriaN2Options: string[];
+  /** "categoryOnly" is for non-admins: no region/vendedor pickers, since they can't browse others'. */
+  variant?: "full" | "categoryOnly";
 }) {
   const router = useRouter();
   const [search, setSearch] = useState(q);
@@ -47,6 +50,33 @@ export default function DashboardFilters({
     setSearch(value);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => go({ q: value }), 350);
+  }
+
+  if (variant === "categoryOnly") {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={categoriaN2}
+          onChange={(e) => go({ categoriaN2: e.target.value })}
+          className="rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-body-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+        >
+          <option value="">Todas las categorías</option>
+          {categoriaN2Options.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+        {categoriaN2 && (
+          <button
+            onClick={() => go({ categoriaN2: "" })}
+            className="rounded-md px-3 py-2 text-body-sm text-on-surface-variant hover:bg-surface-container-high"
+          >
+            Limpiar filtro
+          </button>
+        )}
+      </div>
+    );
   }
 
   return (

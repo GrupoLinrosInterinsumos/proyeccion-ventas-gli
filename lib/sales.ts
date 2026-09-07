@@ -671,9 +671,17 @@ export async function listVendedores(): Promise<DirectoryUser[]> {
   return rows;
 }
 
-export async function listCategoriaN2(): Promise<string[]> {
+/** All categories, or only the ones a given vendedor actually has movement in. */
+export async function listCategoriaN2(vendedor?: string): Promise<string[]> {
+  const where = [`categoria_n2 IS NOT NULL`, `categoria_n2 != ''`];
+  const params: unknown[] = [];
+  if (vendedor) {
+    params.push(vendedor);
+    where.push(`vendedor = $${params.length}`);
+  }
   const rows = await query<{ categoria_n2: string }>(
-    `SELECT DISTINCT categoria_n2 FROM sales WHERE categoria_n2 IS NOT NULL AND categoria_n2 != '' ORDER BY categoria_n2`
+    `SELECT DISTINCT categoria_n2 FROM sales WHERE ${where.join(" AND ")} ORDER BY categoria_n2`,
+    params
   );
   return rows.map((r) => r.categoria_n2);
 }

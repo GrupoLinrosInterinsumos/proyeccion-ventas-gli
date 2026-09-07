@@ -38,15 +38,16 @@ export default async function DashboardPage({
   const period = periodStatus(requestedPeriod) === "future" ? open : requestedPeriod;
   const closed = closedMonthsForPeriod(period);
 
-  // Non-admins are locked to their own scope — no filter picking, no cross-vendedor browsing.
+  // Non-admins are locked to their own scope — no cross-vendedor/region browsing — but can
+  // still narrow their own view by category.
   const region: Region | "" = isAdmin ? (isRegion(params.region) ? params.region : "") : session.region ?? "";
   const vendedor = isAdmin ? params.vendedor?.trim() || "" : session.vendedor ?? "";
   const q = isAdmin ? params.q?.trim() || "" : "";
-  const categoriaN2 = isAdmin ? params.categoriaN2?.trim() || "" : "";
+  const categoriaN2 = params.categoriaN2?.trim() || "";
 
   const [allVendedores, categoriaN2Options] = await Promise.all([
     isAdmin ? listVendedores() : Promise.resolve([]),
-    isAdmin ? listCategoriaN2() : Promise.resolve([]),
+    listCategoriaN2(isAdmin ? undefined : session.vendedor ?? undefined),
   ]);
   const vendedorOptions = allVendedores
     .filter((v) => !region || v.region === region)
@@ -86,8 +87,8 @@ export default async function DashboardPage({
               Promedios calculados sobre {closed.map(periodLabel).join(" · ")}
             </p>
           </div>
-          {isAdmin && (
-            <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {isAdmin ? (
               <DashboardFilters
                 region={region}
                 vendedor={vendedor}
@@ -97,6 +98,21 @@ export default async function DashboardPage({
                 vendedorOptions={vendedorOptions}
                 categoriaN2Options={categoriaN2Options}
               />
+            ) : (
+              categoriaN2Options.length > 0 && (
+                <DashboardFilters
+                  region=""
+                  vendedor=""
+                  q=""
+                  categoriaN2={categoriaN2}
+                  period={period}
+                  vendedorOptions={[]}
+                  categoriaN2Options={categoriaN2Options}
+                  variant="categoryOnly"
+                />
+              )
+            )}
+            {isAdmin && (
               <a
                 href={`/api/export?period=${period}`}
                 className="flex h-touch items-center gap-1.5 rounded-md border border-outline-variant bg-surface-container-lowest px-3 text-body-sm font-medium text-on-surface hover:bg-surface-container-high"
@@ -107,8 +123,8 @@ export default async function DashboardPage({
                 </svg>
                 Descargar Excel
               </a>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
