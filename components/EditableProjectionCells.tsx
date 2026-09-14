@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { saveProjectionAction } from "@/app/actions";
-import { formatUsd } from "@/lib/format";
+import { formatQty, formatUsd } from "@/lib/format";
 
 export default function EditableProjectionCells({
   period,
@@ -23,19 +23,22 @@ export default function EditableProjectionCells({
   promedio: number;
   ingresoProyectado: number;
 }) {
-  const [proyeccion, setProyeccion] = useState(initialProyeccion?.toString() ?? "");
   const [observaciones, setObservaciones] = useState(initialObservaciones ?? "");
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [, startTransition] = useTransition();
 
-  function persist(next: { proyeccion?: string; observaciones?: string }) {
+  // The quantity itself is never edited here — it's the auto-summed total from the client
+  // breakdown below (see lib/client-projections.ts's syncProductProjectionFromClients). Editing
+  // it directly used to let it drift out of sync with that sum, so only observaciones is
+  // editable in this row; we still echo the current proyeccion back on save so it isn't cleared.
+  function persistObservaciones(next: string) {
     const fd = new FormData();
     fd.set("period", period);
     fd.set("vendedor", vendedor);
     fd.set("producto_ref", producto_ref);
     fd.set("producto_nombre", producto_nombre);
-    fd.set("proyeccion", next.proyeccion ?? proyeccion);
-    fd.set("observaciones", next.observaciones ?? observaciones);
+    fd.set("proyeccion", initialProyeccion?.toString() ?? "");
+    fd.set("observaciones", next);
 
     setStatus("saving");
     startTransition(async () => {
@@ -45,28 +48,16 @@ export default function EditableProjectionCells({
     });
   }
 
-  const proyeccionNum = proyeccion.trim() === "" ? null : Number(proyeccion);
   const delta =
-    proyeccionNum !== null && promedio > 0 ? (proyeccionNum - promedio) / promedio : null;
+    initialProyeccion !== null && promedio > 0 ? (initialProyeccion - promedio) / promedio : null;
 
   return (
     <>
       <td className="whitespace-nowrap px-3 py-2">
         <div className="flex items-center gap-2">
-          <input
-            type="number"
-            inputMode="numeric"
-            step="1"
-            value={proyeccion}
-            onChange={(e) => setProyeccion(e.target.value)}
-            onBlur={() => {
-              const rounded = proyeccion.trim() === "" ? "" : String(Math.round(Number(proyeccion)));
-              setProyeccion(rounded);
-              persist({ proyeccion: rounded });
-            }}
-            placeholder="—"
-            className="w-24 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-          />
+          <span className="text-body-sm tabular-nums text-on-surface">
+            {initialProyeccion !== null ? formatQty(initialProyeccion) : "—"}
+          </span>
           {delta !== null && (
             <span
               className={`rounded px-1.5 py-0.5 text-label-sm font-medium ${
@@ -92,7 +83,7 @@ export default function EditableProjectionCells({
           type="text"
           value={observaciones}
           onChange={(e) => setObservaciones(e.target.value)}
-          onBlur={() => persist({ observaciones })}
+          onBlur={() => persistObservaciones(observaciones)}
           placeholder="Sin observaciones"
           className="w-full min-w-[180px] rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
         />

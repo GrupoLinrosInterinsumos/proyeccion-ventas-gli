@@ -40,6 +40,18 @@ async function revenueByProduct(period: string, vendedor: string): Promise<Map<s
   return new Map(rows.map((r) => [r.producto_ref, Number(r.total)]));
 }
 
+/** Per producto_ref: sum of client-level proyección quantities, for one vendedor+period. */
+async function clientQtySumByProduct(period: string, vendedor: string): Promise<Map<string, number>> {
+  const rows = await query<{ producto_ref: string; total: number }>(
+    `SELECT producto_ref, SUM(proyeccion_cantidad) as total
+     FROM client_projections
+     WHERE period = $1 AND vendedor = $2
+     GROUP BY producto_ref`,
+    [period, vendedor]
+  );
+  return new Map(rows.map((r) => [r.producto_ref, Number(r.total)]));
+}
+
 /** Flat, ordered (desc by 3-month avg) product table for a single vendedor. */
 export async function getVendorProductTable(
   vendedor: string,
@@ -74,20 +86,29 @@ export async function getVendorProductTable(
     [vendedor, projectionPeriod]
   );
   const revenueByRef = await revenueByProduct(projectionPeriod, vendedor);
+  const clientQtyByRef = await clientQtySumByProduct(projectionPeriod, vendedor);
 
   const projByRef = new Map(projRows.map((p) => [p.producto_ref, p]));
   const rows: ProductRow[] = [];
+  // Products whose stored proyección disagrees with the fresh client-level sum — happens only
+  // from data saved before that sum became the rule. Corrected below so it doesn't linger.
+  const corrections: { producto_ref: string; producto_nombre: string; proyeccion: number }[] = [];
 
   for (const row of salesRows) {
     const proj = projByRef.get(row.producto_ref);
     projByRef.delete(row.producto_ref);
+    const storedProyeccion = proj?.proyeccion != null ? Number(proj.proyeccion) : null;
+    const clientSum = clientQtyByRef.get(row.producto_ref);
+    if (clientSum !== undefined && clientSum !== storedProyeccion) {
+      corrections.push({ producto_ref: row.producto_ref, producto_nombre: row.producto_nombre, proyeccion: clientSum });
+    }
     rows.push({
       producto_ref: row.producto_ref,
       producto_nombre: row.producto_nombre,
       categoria_n2: row.categoria_n2,
       cantidad_total: Number(row.total),
       promedio_mensual: Number(row.total) / denom,
-      proyeccion: proj?.proyeccion != null ? Number(proj.proyeccion) : null,
+      proyeccion: clientSum !== undefined ? clientSum : storedProyeccion,
       ingreso_proyectado: revenueByRef.get(row.producto_ref) ?? 0,
       observaciones: proj?.observaciones ?? null,
       is_manual: false,
@@ -96,13 +117,18 @@ export async function getVendorProductTable(
 
   // Remaining projection rows with no sales history = manually added products.
   for (const proj of projByRef.values()) {
+    const storedProyeccion = proj.proyeccion != null ? Number(proj.proyeccion) : null;
+    const clientSum = clientQtyByRef.get(proj.producto_ref);
+    if (clientSum !== undefined && clientSum !== storedProyeccion) {
+      corrections.push({ producto_ref: proj.producto_ref, producto_nombre: proj.producto_nombre, proyeccion: clientSum });
+    }
     rows.push({
       producto_ref: proj.producto_ref,
       producto_nombre: proj.producto_nombre,
       categoria_n2: null,
       cantidad_total: 0,
       promedio_mensual: 0,
-      proyeccion: proj.proyeccion != null ? Number(proj.proyeccion) : null,
+      proyeccion: clientSum !== undefined ? clientSum : storedProyeccion,
       ingreso_proyectado: revenueByRef.get(proj.producto_ref) ?? 0,
       observaciones: proj.observaciones,
       is_manual: true,
@@ -110,6 +136,10 @@ export async function getVendorProductTable(
   }
 
   rows.sort((a, b) => b.promedio_mensual - a.promedio_mensual);
+
+  if (periodStatus(projectionPeriod) === "open" && corrections.length > 0) {
+    await persistProjectionCorrections(projectionPeriod, vendedor, corrections);
+  }
 
   // A product with no proyección yet defaults (for display) to its own 3-month average — the
   // same rule client rows use. Persist that default now so it's already there when nobody has
@@ -123,6 +153,30 @@ export async function getVendorProductTable(
   }
 
   return rows;
+}
+
+/** Overwrites `projections.proyeccion` for rows whose stored value disagrees with the fresh
+ * client-level sum — unlike materializeDefaultProjections, this updates existing rows. */
+async function persistProjectionCorrections(
+  period: string,
+  vendedor: string,
+  rows: { producto_ref: string; producto_nombre: string; proyeccion: number }[]
+): Promise<void> {
+  const params: unknown[] = [period, vendedor];
+  const tuples: string[] = [];
+  for (const r of rows) {
+    const base = params.length;
+    tuples.push(`($1,$2,$${base + 1},$${base + 2},$${base + 3},FALSE,now())`);
+    params.push(r.producto_ref, r.producto_nombre, r.proyeccion);
+  }
+  await query(
+    `INSERT INTO projections (period, vendedor, producto_ref, producto_nombre, proyeccion, is_manual, updated_at)
+     VALUES ${tuples.join(",")}
+     ON CONFLICT (period, vendedor, producto_ref) DO UPDATE SET
+       proyeccion = excluded.proyeccion,
+       updated_at = now()`,
+    params
+  );
 }
 
 async function materializeDefaultProjections(
@@ -167,21 +221,32 @@ export async function getFullCatalogProductTable(vendedor: string, projectionPer
   ]);
   const projByRef = new Map(projRows.map((p) => [p.producto_ref, p]));
   const revenueByRef = await revenueByProduct(projectionPeriod, vendedor);
+  const clientQtyByRef = await clientQtySumByProduct(projectionPeriod, vendedor);
+  const corrections: { producto_ref: string; producto_nombre: string; proyeccion: number }[] = [];
 
   const rows: ProductRow[] = catalogRows.map((c) => {
     const proj = projByRef.get(c.producto_ref);
+    const storedProyeccion = proj?.proyeccion != null ? Number(proj.proyeccion) : null;
+    const clientSum = clientQtyByRef.get(c.producto_ref);
+    if (clientSum !== undefined && clientSum !== storedProyeccion) {
+      corrections.push({ producto_ref: c.producto_ref, producto_nombre: c.producto_nombre, proyeccion: clientSum });
+    }
     return {
       producto_ref: c.producto_ref,
       producto_nombre: c.producto_nombre,
       categoria_n2: c.categoria_n2,
       cantidad_total: 0,
       promedio_mensual: 0,
-      proyeccion: proj?.proyeccion != null ? Number(proj.proyeccion) : null,
+      proyeccion: clientSum !== undefined ? clientSum : storedProyeccion,
       ingreso_proyectado: revenueByRef.get(c.producto_ref) ?? 0,
       observaciones: proj?.observaciones ?? null,
       is_manual: false,
     };
   });
+
+  if (periodStatus(projectionPeriod) === "open" && corrections.length > 0) {
+    await persistProjectionCorrections(projectionPeriod, vendedor, corrections);
+  }
 
   // Prioritize items that already have a proyección set, then fall back to alphabetical.
   rows.sort((a, b) => {
