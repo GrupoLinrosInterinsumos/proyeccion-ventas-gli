@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { getSession } from "@/lib/auth";
-import { getProjectionExportRows } from "@/lib/export";
+import { getProjectionExportRows, summarizeExportByProduct } from "@/lib/export";
 import { periodLabel } from "@/lib/period";
 
 export async function GET(req: NextRequest) {
@@ -14,8 +14,9 @@ export async function GET(req: NextRequest) {
   if (!period) return NextResponse.json({ error: "Falta el periodo" }, { status: 400 });
 
   const rows = await getProjectionExportRows(period);
+  const summary = summarizeExportByProduct(rows);
 
-  const sheet = XLSX.utils.json_to_sheet(
+  const detailSheet = XLSX.utils.json_to_sheet(
     rows.map((r) => ({
       Vendedor: r.vendedor,
       Sede: r.sede,
@@ -24,10 +25,20 @@ export async function GET(req: NextRequest) {
       "Detalle de fijado": r.fijado,
     }))
   );
-  sheet["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 50 }, { wch: 10 }, { wch: 24 }];
+  detailSheet["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 50 }, { wch: 10 }, { wch: 24 }];
+
+  const summarySheet = XLSX.utils.json_to_sheet(
+    summary.map((r) => ({
+      Producto: r.producto,
+      "Total proyectado": r.cantidad_total,
+      Vendedores: r.vendedores,
+    }))
+  );
+  summarySheet["!cols"] = [{ wch: 50 }, { wch: 16 }, { wch: 60 }];
 
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, "Proyeccion");
+  XLSX.utils.book_append_sheet(workbook, detailSheet, "Proyeccion");
+  XLSX.utils.book_append_sheet(workbook, summarySheet, "Resumen por producto");
   const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
 
   const filename = `Proyeccion ${periodLabel(period)}.xlsx`;

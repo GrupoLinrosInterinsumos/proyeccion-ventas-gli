@@ -1,4 +1,6 @@
 import { query } from "./db";
+import { listUsers } from "./users";
+import { getVendorProductTable, getFullCatalogProductTable } from "./sales";
 
 export type ProjectionExportRow = {
   vendedor: string;
@@ -9,33 +11,69 @@ export type ProjectionExportRow = {
 };
 
 /**
- * One row per (vendedor, producto) with a proyección set for the period, plus whether any
- * client under that product is "fijado" (pinned) and until when.
+ * One row per (vendedor, producto) with a proyección for the period — every product a vendedor
+ * has, whether or not they've explicitly touched it (untouched ones default to their historical
+ * average, same as what they'd see on their own page) — plus whether any client under that
+ * product is "fijado" (pinned) and until when.
  */
 export async function getProjectionExportRows(period: string): Promise<ProjectionExportRow[]> {
-  const rows = await query<{
-    vendedor: string;
-    region: string | null;
-    producto_nombre: string;
-    proyeccion: number;
-    fijado_hasta: string | null;
-  }>(
-    `SELECT p.vendedor, u.region, p.producto_nombre, p.proyeccion,
-            (SELECT MAX(cp.fijado_hasta)::text FROM client_projections cp
-             WHERE cp.vendedor = p.vendedor AND cp.producto_ref = p.producto_ref
-               AND cp.period = p.period AND cp.fijado_hasta IS NOT NULL) as fijado_hasta
-     FROM projections p
-     LEFT JOIN users u ON u.vendedor = p.vendedor
-     WHERE p.period = $1 AND p.proyeccion IS NOT NULL
-     ORDER BY p.vendedor, p.producto_nombre`,
+  const users = await listUsers();
+  const vendedores = users.filter((u): u is typeof u & { vendedor: string } => !!u.vendedor);
+
+  const fijadoRows = await query<{ vendedor: string; producto_ref: string; fijado_hasta: string }>(
+    `SELECT vendedor, producto_ref, MAX(fijado_hasta)::text as fijado_hasta
+     FROM client_projections
+     WHERE period = $1 AND fijado_hasta IS NOT NULL
+     GROUP BY vendedor, producto_ref`,
     [period]
   );
+  const fijadoByKey = new Map(fijadoRows.map((r) => [`${r.vendedor}::${r.producto_ref}`, r.fijado_hasta]));
 
-  return rows.map((r) => ({
-    vendedor: r.vendedor,
-    sede: r.region ?? "",
-    producto: r.producto_nombre,
-    cantidad: Number(r.proyeccion),
-    fijado: r.fijado_hasta ? `Fijado hasta ${r.fijado_hasta}` : "No fijado",
-  }));
+  const perVendedor = await Promise.all(
+    vendedores.map(async (u) => {
+      const rows = u.is_spot
+        ? await getFullCatalogProductTable(u.vendedor, period)
+        : await getVendorProductTable(u.vendedor, period);
+      return rows
+        .filter((row) => row.proyeccion !== null)
+        .map((row): ProjectionExportRow => {
+          const fijado = fijadoByKey.get(`${u.vendedor}::${row.producto_ref}`);
+          return {
+            vendedor: u.vendedor,
+            sede: u.region ?? "",
+            producto: row.producto_nombre,
+            cantidad: row.proyeccion as number,
+            fijado: fijado ? `Fijado hasta ${fijado}` : "No fijado",
+          };
+        });
+    })
+  );
+
+  return perVendedor
+    .flat()
+    .sort((a, b) => a.vendedor.localeCompare(b.vendedor, "es") || a.producto.localeCompare(b.producto, "es"));
+}
+
+export type ProjectionExportProductSummaryRow = {
+  producto: string;
+  cantidad_total: number;
+  vendedores: string;
+};
+
+/** Groups export rows by producto — total proyectado and which vendedores contribute to it. */
+export function summarizeExportByProduct(rows: ProjectionExportRow[]): ProjectionExportProductSummaryRow[] {
+  const byProduct = new Map<string, { cantidad_total: number; vendedores: Set<string> }>();
+  for (const r of rows) {
+    const entry = byProduct.get(r.producto) ?? { cantidad_total: 0, vendedores: new Set<string>() };
+    entry.cantidad_total += r.cantidad;
+    entry.vendedores.add(r.vendedor);
+    byProduct.set(r.producto, entry);
+  }
+  return [...byProduct.entries()]
+    .map(([producto, v]) => ({
+      producto,
+      cantidad_total: v.cantidad_total,
+      vendedores: [...v.vendedores].sort((a, b) => a.localeCompare(b, "es")).join(", "),
+    }))
+    .sort((a, b) => b.cantidad_total - a.cantidad_total);
 }
