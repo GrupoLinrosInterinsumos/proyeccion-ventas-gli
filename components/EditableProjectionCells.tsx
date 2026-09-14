@@ -70,9 +70,11 @@ export default function EditableProjectionCells({
           {delta !== null && (
             <span
               className={`rounded px-1.5 py-0.5 text-label-sm font-medium ${
-                delta >= 0
-                  ? "bg-tertiary-fixed text-on-tertiary-fixed-variant"
-                  : "bg-secondary-fixed text-on-secondary-fixed-variant"
+                delta >= 1
+                  ? "bg-error-container text-on-error-container"
+                  : delta >= 0
+                    ? "bg-tertiary-fixed text-on-tertiary-fixed-variant"
+                    : "bg-secondary-fixed text-on-secondary-fixed-variant"
               }`}
               title="Variación vs. promedio de 3 meses"
             >

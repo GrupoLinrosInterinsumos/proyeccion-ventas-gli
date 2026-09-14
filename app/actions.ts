@@ -12,7 +12,7 @@ import { openProjectionPeriod, periodStatus } from "@/lib/period";
 import { isRegion } from "@/lib/regions";
 import { generatePassword } from "@/lib/password";
 import { countAdmins } from "@/lib/users";
-import { saveClientProjection } from "@/lib/client-projections";
+import { saveClientProjection, deleteClientProjection, isClientManual } from "@/lib/client-projections";
 
 export type ActionState = { error?: string; success?: string } | null;
 
@@ -381,8 +381,6 @@ export async function saveClientProjectionAction(formData: FormData): Promise<Ac
     proyeccion: proyeccionNum,
     precio: precioNum,
     fijado_hasta: fijadoHasta,
-    // Editing re-arms the over-threshold alert — only the explicit "descartar" dismisses it.
-    alertAcknowledged: false,
     updatedBy: session.id,
   });
 
@@ -391,43 +389,86 @@ export async function saveClientProjectionAction(formData: FormData): Promise<Ac
   return { success: "Guardado." };
 }
 
-const acknowledgeAlertSchema = z.object({
+const deleteClientProjectionSchema = z.object({
   period: z.string().min(1),
   vendedor: z.string().min(1),
   producto_ref: z.string().min(1),
   producto_nombre: z.string().min(1),
   partner: z.string().min(1),
-  proyeccion: z.string().optional(),
-  precio: z.string().optional(),
-  fijado_hasta: z.string().optional(),
 });
 
-export async function acknowledgeAlertAction(formData: FormData): Promise<ActionState> {
+export async function deleteClientProjectionAction(formData: FormData): Promise<ActionState> {
   const session = await getSession();
   if (!session) return { error: "Sesión expirada." };
 
-  const parsed = acknowledgeAlertSchema.safeParse(Object.fromEntries(formData));
+  const parsed = deleteClientProjectionSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: "Datos inválidos." };
   const data = parsed.data;
 
-  if (data.vendedor !== session.vendedor && !session.isAdmin) {
-    return { error: "No autorizado." };
+  if (data.vendedor !== session.vendedor) {
+    return { error: "Solo puedes eliminar clientes de tu propia proyección." };
+  }
+  if (periodStatus(data.period) !== "open") {
+    return { error: "Esta proyección ya está cerrada y no se puede editar." };
+  }
+  if (!(await isClientManual(data.vendedor, data.producto_ref, data.partner))) {
+    return { error: "Solo se pueden eliminar clientes agregados manualmente." };
   }
 
-  await saveClientProjection({
+  await deleteClientProjection({
     period: data.period,
     vendedor: data.vendedor,
     producto_ref: data.producto_ref,
     producto_nombre: data.producto_nombre,
     partner: data.partner,
-    proyeccion: data.proyeccion?.trim() ? Number(data.proyeccion) : null,
-    precio: data.precio?.trim() ? Number(data.precio) : null,
-    fijado_hasta: data.fijado_hasta?.trim() || null,
-    alertAcknowledged: true,
     updatedBy: session.id,
   });
 
   revalidatePath("/ventas");
   revalidatePath("/dashboard");
-  return { success: "Alerta descartada." };
+  return { success: "Cliente eliminado." };
+}
+
+const deleteProductSchema = z.object({
+  period: z.string().min(1),
+  vendedor: z.string().min(1),
+  producto_ref: z.string().min(1),
+});
+
+export async function deleteProductAction(formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session) return { error: "Sesión expirada." };
+
+  const parsed = deleteProductSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: "Datos inválidos." };
+  const data = parsed.data;
+
+  if (data.vendedor !== session.vendedor) {
+    return { error: "Solo puedes eliminar productos de tu propia proyección." };
+  }
+  if (periodStatus(data.period) !== "open") {
+    return { error: "Esta proyección ya está cerrada y no se puede editar." };
+  }
+
+  const existing = await query<{ is_manual: boolean }>(
+    `SELECT is_manual FROM projections WHERE period = $1 AND vendedor = $2 AND producto_ref = $3`,
+    [data.period, data.vendedor, data.producto_ref]
+  );
+  if (existing.length === 0) return { error: "Ese producto ya no existe." };
+  if (!existing[0].is_manual) return { error: "Solo se pueden eliminar productos agregados manualmente." };
+
+  await query(`DELETE FROM client_projections WHERE period = $1 AND vendedor = $2 AND producto_ref = $3`, [
+    data.period,
+    data.vendedor,
+    data.producto_ref,
+  ]);
+  await query(`DELETE FROM projections WHERE period = $1 AND vendedor = $2 AND producto_ref = $3`, [
+    data.period,
+    data.vendedor,
+    data.producto_ref,
+  ]);
+
+  revalidatePath("/ventas");
+  revalidatePath("/dashboard");
+  return { success: "Producto eliminado." };
 }

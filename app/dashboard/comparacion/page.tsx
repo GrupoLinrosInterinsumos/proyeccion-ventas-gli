@@ -102,7 +102,7 @@ export default async function ComparacionPage({
 
         {excedido && (
           <div className="mt-4 rounded-md border border-error-container bg-error-container px-4 py-2.5 text-body-sm text-on-error-container">
-            Lo real superó el doble de lo proyectado — coordinar con compras. Si ya se coordinó, se puede ignorar.
+            Lo real superó el doble de lo proyectado.
           </div>
         )}
 

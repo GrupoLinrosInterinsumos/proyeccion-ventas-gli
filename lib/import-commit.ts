@@ -13,6 +13,7 @@ const SALES_COLUMNS = [
   "categoria_n2",
   "cantidad",
   "ingreso_soles",
+  "precio_unitario",
 ] as const;
 
 const BATCH_SIZE = 500;
@@ -52,7 +53,8 @@ export async function commitImport(
             row.categoria,
             row.categoria_n2,
             row.cantidad,
-            row.ingreso_soles
+            row.ingreso_soles,
+            row.precio_unitario
           );
           return `(${SALES_COLUMNS.map((_, colIdx) => `$${base + colIdx + 1}`).join(",")})`;
         })

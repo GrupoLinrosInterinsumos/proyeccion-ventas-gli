@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS sales (
   categoria TEXT,
   categoria_n2 TEXT,
   cantidad DOUBLE PRECISION NOT NULL DEFAULT 0,
-  ingreso_soles DOUBLE PRECISION NOT NULL DEFAULT 0
+  ingreso_soles DOUBLE PRECISION NOT NULL DEFAULT 0,
+  precio_unitario DOUBLE PRECISION NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_sales_lookup ON sales (vendedor, producto_ref, period);
 CREATE INDEX IF NOT EXISTS idx_sales_period ON sales (period);
@@ -85,6 +86,7 @@ CREATE INDEX IF NOT EXISTS idx_client_projections_lookup ON client_projections (
 ALTER TABLE users ALTER COLUMN vendedor DROP NOT NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_spot BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS categoria_n2 TEXT;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS precio_unitario DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE projections ADD COLUMN IF NOT EXISTS fijado_hasta DATE;
 `;
 

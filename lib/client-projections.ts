@@ -37,12 +37,21 @@ export async function getClientProjections(
     [vendedor, producto_ref, ...closed]
   );
 
-  // Unit price per client: prefer the most recent closed month they actually bought in — not
-  // necessarily the single latest month, since a client may skip a month within the 3-month window.
+  // Unit price per client (USD): prefer the "P. Unitario $" column from the import, weighted by
+  // quantity, since it's the actual negotiated price — falling back to ingreso/cantidad for older
+  // rows imported before that column existed. Uses the most recent closed month the client
+  // actually bought in, not necessarily the single latest month in the 3-month window.
   const priceRows = closed.length
-    ? await query<{ partner: string; period: string; cantidad: number; ingreso: number }>(
+    ? await query<{
+        partner: string;
+        period: string;
+        cantidad: number;
+        ingreso: number;
+        precioPonderado: number;
+      }>(
         `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner, period,
-                SUM(cantidad) as cantidad, SUM(ingreso_soles) as ingreso
+                SUM(cantidad) as cantidad, SUM(ingreso_soles) as ingreso,
+                SUM(precio_unitario * cantidad) as "precioPonderado"
          FROM sales
          WHERE vendedor = $1 AND producto_ref = $2 AND period IN (${placeholders(closed.length, 3)})
          GROUP BY partner, period`,
@@ -59,7 +68,9 @@ export async function getClientProjections(
   for (const row of priceRows) {
     if (Number(row.cantidad) <= 0) continue;
     if (latestPriceByPartner.get(row.partner) === row.period) {
-      priceByPartner.set(row.partner, Number(row.ingreso) / Number(row.cantidad));
+      const cantidad = Number(row.cantidad);
+      const precioPonderado = Number(row.precioPonderado);
+      priceByPartner.set(row.partner, precioPonderado > 0 ? precioPonderado / cantidad : Number(row.ingreso) / cantidad);
     }
   }
 
@@ -244,5 +255,42 @@ async function syncProductProjectionFromClients(
        updated_by = excluded.updated_by,
        updated_at = now()`,
     [period, vendedor, producto_ref, producto_nombre, total, updatedBy]
+  );
+}
+
+/** True if this partner has no real sales history under this vendedor+producto — i.e. it was
+ * added manually via "+ Agregar cliente" rather than coming from an Excel import. */
+export async function isClientManual(vendedor: string, producto_ref: string, partner: string): Promise<boolean> {
+  const row = await queryOne<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM sales
+       WHERE vendedor = $1 AND producto_ref = $2
+         AND COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') = $3
+     ) as exists`,
+    [vendedor, producto_ref, partner]
+  );
+  return !row?.exists;
+}
+
+/** Removes a manually-added client row and re-syncs the product-level total. Callers must
+ * verify with isClientManual() first — this does not re-check. */
+export async function deleteClientProjection(params: {
+  period: string;
+  vendedor: string;
+  producto_ref: string;
+  producto_nombre: string;
+  partner: string;
+  updatedBy: number;
+}): Promise<void> {
+  await query(
+    `DELETE FROM client_projections WHERE period = $1 AND vendedor = $2 AND producto_ref = $3 AND partner = $4`,
+    [params.period, params.vendedor, params.producto_ref, params.partner]
+  );
+  await syncProductProjectionFromClients(
+    params.period,
+    params.vendedor,
+    params.producto_ref,
+    params.producto_nombre,
+    params.updatedBy
   );
 }

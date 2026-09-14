@@ -15,7 +15,11 @@ export type AggregatedSaleRow = {
   categoria_n2: string;
   cantidad: number;
   ingreso_soles: number;
+  /** Weighted-average unit price (USD) across the source rows aggregated into this one. */
+  precio_unitario: number;
 };
+
+type InternalAggregatedRow = AggregatedSaleRow & { precioPonderadoSum: number };
 
 export type ParseResult = {
   rows: AggregatedSaleRow[];
@@ -109,11 +113,20 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     categoria: findColumn("Categoria de Producto N1"),
     categoriaN2: findColumnAny("Categoria N2", "Categoria de Producto N2"),
     ingreso: findColumnAny("Ingreso Total $", "Ingreso Total S/."),
+    precioUnitario: findColumn("P. Unitario $"),
   };
 
-  const aggregated = new Map<string, AggregatedSaleRow>();
+  const aggregated = new Map<string, InternalAggregatedRow>();
   const periods = new Set<string>();
   const warnings: string[] = [];
+  if (idx.precioUnitario == null) {
+    warnings.push(
+      `No se encontró la columna "P. Unitario $" — el precio por cliente se calculó como Ingreso Total ÷ Cantidad.`
+    );
+  }
+  if (idx.categoriaN2 == null) {
+    warnings.push(`No se encontró la columna "Categoria N2" — los filtros por categoría quedarán vacíos.`);
+  }
   let unrecognizedRegions = 0;
   let invalidRows = 0;
   let excludedVendedorRows = 0;
@@ -157,6 +170,8 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     const categoria = idx.categoria != null ? String(row[idx.categoria]?.v ?? "").trim() : "";
     const categoriaN2 = idx.categoriaN2 != null ? String(row[idx.categoriaN2]?.v ?? "").trim() : "";
     const ingreso = idx.ingreso != null ? Number(row[idx.ingreso]?.v ?? 0) || 0 : 0;
+    const precioUnitarioRaw =
+      idx.precioUnitario != null ? Number(row[idx.precioUnitario]?.v ?? 0) || 0 : 0;
     const productoNombre = cleanProductName(productoRaw);
 
     const key = `${period}::${equipo}::${vendedor}::${ref}::${partner}`;
@@ -164,6 +179,7 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     if (existing) {
       existing.cantidad += cantidad;
       existing.ingreso_soles += ingreso;
+      existing.precioPonderadoSum += precioUnitarioRaw * cantidad;
     } else {
       aggregated.set(key, {
         period,
@@ -177,6 +193,8 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
         categoria_n2: categoriaN2,
         cantidad,
         ingreso_soles: ingreso,
+        precio_unitario: 0,
+        precioPonderadoSum: precioUnitarioRaw * cantidad,
       });
     }
   }
@@ -196,8 +214,13 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     throw new Error("No se encontraron filas válidas para importar.");
   }
 
+  const rows: AggregatedSaleRow[] = [...aggregated.values()].map(({ precioPonderadoSum, ...row }) => ({
+    ...row,
+    precio_unitario: row.cantidad > 0 ? precioPonderadoSum / row.cantidad : 0,
+  }));
+
   return {
-    rows: [...aggregated.values()],
+    rows,
     periods: [...periods].sort(),
     sourceRowCount,
     warnings,

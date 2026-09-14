@@ -223,16 +223,29 @@ async function SearchResultsSection({
     getProductBreakdown(period, { region, q, categoriaN2 }, 30),
   ]);
 
+  // Adapt to what was actually found: a vendedor-only search shows just the vendedor chips,
+  // a product-only search shows just the product breakdown (with its client detail on expand).
+  const hasVendorMatches = vendorMatches.length > 0;
+  const hasProductMatches = productMatches.length > 0;
+
+  if (!hasVendorMatches && !hasProductMatches) {
+    return (
+      <div className="mt-8 rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest p-10 text-center">
+        <p className="text-body-md text-on-surface-variant">
+          Sin coincidencias para &quot;{q}&quot;.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="mt-8 flex flex-col gap-6">
-      <section className="rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
-        <h2 className="flex items-center gap-2.5 border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
-          <span className="h-2 w-2 rounded-full bg-primary" aria-hidden />
-          Vendedores &middot; &quot;{q}&quot;
-        </h2>
-        {vendorMatches.length === 0 ? (
-          <p className="px-5 py-6 text-body-sm text-on-surface-variant">Sin coincidencias.</p>
-        ) : (
+      {hasVendorMatches && (
+        <section className="rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
+          <h2 className="flex items-center gap-2.5 border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
+            <span className="h-2 w-2 rounded-full bg-primary" aria-hidden />
+            Vendedores &middot; &quot;{q}&quot;
+          </h2>
           <div className="flex flex-wrap gap-2 p-5">
             {vendorMatches.filter((v) => v.vendedor).map((v: UserListRow) => (
               <Link
@@ -247,10 +260,12 @@ async function SearchResultsSection({
               </Link>
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
-      <ProductBreakdownCard products={productMatches} period={period} region={region} title={`Productos · "${q}"`} />
+      {hasProductMatches && (
+        <ProductBreakdownCard products={productMatches} period={period} region={region} title={`Productos · "${q}"`} />
+      )}
     </div>
   );
 }
@@ -483,7 +498,7 @@ function ComparisonKpiCard({ comparison, href }: { comparison: PeriodComparison;
       </div>
       <p className={`mt-1 text-label-sm ${comparison.excedido ? "text-on-error-container" : "text-on-surface-variant"}`}>
         {comparison.excedido
-          ? "Excedido · coordinar con compras — clic para ver el desglose"
+          ? "Excedido — clic para ver el desglose"
           : "Clic para ver el desglose por vendedor y producto"}
       </p>
     </a>

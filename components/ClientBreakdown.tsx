@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { formatQty, formatUsd } from "@/lib/format";
-import { saveClientProjectionAction, acknowledgeAlertAction } from "@/app/actions";
+import { saveClientProjectionAction, deleteClientProjectionAction } from "@/app/actions";
 
 type Row = {
   partner: string;
@@ -191,15 +191,18 @@ function ClientRow({
   const [fijadoHasta, setFijadoHasta] = useState(row.fijado_hasta ?? "");
   const [showDate, setShowDate] = useState(false);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const proyeccionNum = proyeccion.trim() === "" ? null : Number(proyeccion);
   const precioNum = precio.trim() === "" ? null : Number(precio);
   const total = proyeccionNum != null && precioNum != null ? proyeccionNum * precioNum : 0;
 
-  const overThreshold =
-    row.promedio_mensual > 0 && proyeccionNum != null && proyeccionNum >= row.promedio_mensual * 2;
-  const showAlert = overThreshold && !row.alert_acknowledged;
+  const delta =
+    proyeccionNum !== null && row.promedio_mensual > 0
+      ? (proyeccionNum - row.promedio_mensual) / row.promedio_mensual
+      : null;
+  const overThreshold = delta !== null && delta >= 1;
 
   function persist(next: { proyeccion?: string; precio?: string; fijado_hasta?: string | null }) {
     const fd = new FormData();
@@ -224,19 +227,19 @@ function ClientRow({
     });
   }
 
-  function dismissAlert() {
+  function deleteClient() {
+    if (!confirm(`¿Eliminar a ${row.partner} de este producto?`)) return;
     const fd = new FormData();
     fd.set("period", period);
     fd.set("vendedor", vendedor);
     fd.set("producto_ref", producto_ref);
     fd.set("producto_nombre", producto_nombre);
     fd.set("partner", row.partner);
-    fd.set("proyeccion", proyeccion);
-    fd.set("precio", precio);
-    if (fijadoHasta) fd.set("fijado_hasta", fijadoHasta);
+    setDeleteError(null);
     startTransition(async () => {
-      await acknowledgeAlertAction(fd);
-      onSaved();
+      const res = await deleteClientProjectionAction(fd);
+      if (res?.error) setDeleteError(res.error);
+      else onSaved();
     });
   }
 
@@ -255,29 +258,56 @@ function ClientRow({
               fijado hasta {fijadoHasta}
             </span>
           )}
+          {editable && row.is_manual && (
+            <button
+              onClick={deleteClient}
+              disabled={pending}
+              className="ml-1.5 text-label-sm text-secondary hover:underline disabled:opacity-50"
+            >
+              Eliminar
+            </button>
+          )}
+          {deleteError && <p className="text-label-sm text-secondary">{deleteError}</p>}
         </td>
         <td className="px-3 py-1.5 text-right text-body-sm tabular-nums text-on-surface-variant">
           {formatQty(row.promedio_mensual)}
         </td>
         <td className="px-3 py-1.5">
-          {editable ? (
-            <input
-              type="number"
-              inputMode="numeric"
-              step="1"
-              value={proyeccion}
-              onChange={(e) => setProyeccion(e.target.value)}
-              onBlur={() => {
-                const rounded = proyeccion.trim() === "" ? "" : String(Math.round(Number(proyeccion)));
-                setProyeccion(rounded);
-                persist({ proyeccion: rounded });
-              }}
-              placeholder="—"
-              className="w-20 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-            />
-          ) : (
-            <span className="text-body-sm tabular-nums text-on-surface">{formatQty(proyeccionNum)}</span>
-          )}
+          <div className="flex items-center gap-1.5">
+            {editable ? (
+              <input
+                type="number"
+                inputMode="numeric"
+                step="1"
+                value={proyeccion}
+                onChange={(e) => setProyeccion(e.target.value)}
+                onBlur={() => {
+                  const rounded = proyeccion.trim() === "" ? "" : String(Math.round(Number(proyeccion)));
+                  setProyeccion(rounded);
+                  persist({ proyeccion: rounded });
+                }}
+                placeholder="—"
+                className="w-20 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+              />
+            ) : (
+              <span className="text-body-sm tabular-nums text-on-surface">{formatQty(proyeccionNum)}</span>
+            )}
+            {delta !== null && (
+              <span
+                className={`shrink-0 rounded px-1.5 py-0.5 text-label-sm font-medium ${
+                  overThreshold
+                    ? "bg-error-container text-on-error-container"
+                    : delta >= 0
+                      ? "bg-tertiary-fixed text-on-tertiary-fixed-variant"
+                      : "bg-secondary-fixed text-on-secondary-fixed-variant"
+                }`}
+                title="Variación vs. promedio de 3 meses"
+              >
+                {delta >= 0 ? "+" : ""}
+                {Math.round(delta * 100)}%
+              </span>
+            )}
+          </div>
         </td>
         <td className="px-3 py-1.5">
           {editable ? (
@@ -339,24 +369,13 @@ function ClientRow({
           />
         </td>
       </tr>
-      {showAlert && (
+      {overThreshold && (
         <tr className="border-b border-outline-variant last:border-b-0 bg-error-container">
           <td colSpan={6} className="px-3 py-2">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-body-sm text-on-error-container">
-                <strong>{row.partner}</strong> supera el 100% de su promedio ({formatQty(row.promedio_mensual)} →{" "}
-                {formatQty(proyeccionNum)}) — coordinar con compras. Si ya se coordinó, puedes ignorar la alerta.
-              </p>
-              {editable && (
-                <button
-                  onClick={dismissAlert}
-                  disabled={pending}
-                  className="shrink-0 rounded-md border border-on-error-container/30 px-2 py-1 text-label-sm font-medium text-on-error-container hover:bg-white/20 disabled:opacity-50"
-                >
-                  Ignorar alerta
-                </button>
-              )}
-            </div>
+            <p className="text-body-sm text-on-error-container">
+              <strong>{row.partner}</strong> supera el 100% de su promedio ({formatQty(row.promedio_mensual)} →{" "}
+              {formatQty(proyeccionNum)}).
+            </p>
           </td>
         </tr>
       )}
