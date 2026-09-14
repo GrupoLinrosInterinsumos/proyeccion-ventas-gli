@@ -41,15 +41,17 @@ function cleanProductName(raw: string): string {
   return raw.replace(/^\[[^\]]*\]\s*/, "").trim();
 }
 
-/** Strips accents/case/extra whitespace so a header like "Categoría  de Producto N2" still
- * matches "Categoria de Producto N2" — real export files are inconsistent about this. */
+/** Strips accents/case/extra whitespace/trailing period so a header like "Categoría  de
+ * Producto N2" matches "Categoria de Producto N2", and "P. Unitario $." matches "P. Unitario $"
+ * — real export files are inconsistent about all of this. */
 function normalizeHeader(h: string): string {
   return h
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .replace(/\s+/g, " ")
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/\.$/, "");
 }
 
 type Cell = { v?: unknown } | undefined;
@@ -113,7 +115,7 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     categoria: findColumn("Categoria de Producto N1"),
     categoriaN2: findColumnAny("Categoria N2", "Categoria de Producto N2"),
     ingreso: findColumnAny("Ingreso Total $", "Ingreso Total S/."),
-    precioUnitario: findColumn("P. Unitario $"),
+    precioUnitario: findColumnAny("P. Unitario $.", "P. Unitario $"),
   };
 
   const aggregated = new Map<string, InternalAggregatedRow>();
