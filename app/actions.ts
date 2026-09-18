@@ -368,8 +368,9 @@ export async function saveClientProjectionAction(formData: FormData): Promise<Ac
 
   const proyeccionNum = data.proyeccion?.trim() ? Number(data.proyeccion) : null;
   if (proyeccionNum !== null && Number.isNaN(proyeccionNum)) return { error: "La proyección debe ser numérica." };
-  const precioNum = data.precio?.trim() ? Number(data.precio) : null;
-  if (precioNum !== null && Number.isNaN(precioNum)) return { error: "El precio debe ser numérico." };
+  const precioRaw = data.precio?.trim() ? Number(data.precio) : null;
+  if (precioRaw !== null && Number.isNaN(precioRaw)) return { error: "El precio debe ser numérico." };
+  const precioNum = precioRaw !== null ? Math.round(precioRaw * 100) / 100 : null;
   const fijadoHasta = data.fijado_hasta?.trim() || null;
 
   await saveClientProjection({

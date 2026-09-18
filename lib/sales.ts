@@ -22,6 +22,8 @@ export type ProductRow = {
   categoria_n2: string | null;
   cantidad_total: number;
   promedio_mensual: number;
+  /** 3-month average revenue (USD) — read-only, from the imported sales. */
+  promedio_usd: number;
   proyeccion: number | null;
   ingreso_proyectado: number;
   observaciones: string | null;
@@ -31,7 +33,7 @@ export type ProductRow = {
 /** Per producto_ref: sum of proyección × precio across its clients (USD), for one vendedor+period. */
 async function revenueByProduct(period: string, vendedor: string): Promise<Map<string, number>> {
   const rows = await query<{ producto_ref: string; total: number }>(
-    `SELECT producto_ref, SUM(proyeccion_cantidad * precio) as total
+    `SELECT producto_ref, SUM(proyeccion_cantidad * ROUND(precio::numeric, 2)::double precision) as total
      FROM client_projections
      WHERE period = $1 AND vendedor = $2 AND proyeccion_cantidad IS NOT NULL AND precio IS NOT NULL
      GROUP BY producto_ref`,
@@ -65,9 +67,11 @@ export async function getVendorProductTable(
     producto_nombre: string;
     categoria_n2: string | null;
     total: number;
+    ingreso: number;
   }>(
     `SELECT producto_ref, MAX(producto_nombre) as producto_nombre,
-            MAX(NULLIF(categoria_n2, '')) as categoria_n2, SUM(cantidad) as total
+            MAX(NULLIF(categoria_n2, '')) as categoria_n2, SUM(cantidad) as total,
+            SUM(ingreso_soles) as ingreso
      FROM sales
      WHERE vendedor = $1 AND period IN (${placeholders(closed.length, 2)})
      GROUP BY producto_ref`,
@@ -108,6 +112,7 @@ export async function getVendorProductTable(
       categoria_n2: row.categoria_n2,
       cantidad_total: Number(row.total),
       promedio_mensual: Number(row.total) / denom,
+      promedio_usd: Number(row.ingreso) / denom,
       proyeccion: clientSum !== undefined ? clientSum : storedProyeccion,
       ingreso_proyectado: revenueByRef.get(row.producto_ref) ?? 0,
       observaciones: proj?.observaciones ?? null,
@@ -128,6 +133,7 @@ export async function getVendorProductTable(
       categoria_n2: null,
       cantidad_total: 0,
       promedio_mensual: 0,
+      promedio_usd: 0,
       proyeccion: clientSum !== undefined ? clientSum : storedProyeccion,
       ingreso_proyectado: revenueByRef.get(proj.producto_ref) ?? 0,
       observaciones: proj.observaciones,
@@ -237,6 +243,7 @@ export async function getFullCatalogProductTable(vendedor: string, projectionPer
       categoria_n2: c.categoria_n2,
       cantidad_total: 0,
       promedio_mensual: 0,
+      promedio_usd: 0,
       proyeccion: clientSum !== undefined ? clientSum : storedProyeccion,
       ingreso_proyectado: revenueByRef.get(c.producto_ref) ?? 0,
       observaciones: proj?.observaciones ?? null,
@@ -388,7 +395,7 @@ export async function getDashboardKpis(period: string, filters: DashboardFilters
     ingresoParams.push(filters.categoriaN2);
   }
   const ingreso = await queryOne<{ total: number | null }>(
-    `SELECT SUM(proyeccion_cantidad * precio) as total FROM client_projections WHERE ${ingresoWhere.join(" AND ")}`,
+    `SELECT SUM(proyeccion_cantidad * ROUND(precio::numeric, 2)::double precision) as total FROM client_projections WHERE ${ingresoWhere.join(" AND ")}`,
     ingresoParams
   );
 

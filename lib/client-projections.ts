@@ -5,9 +5,13 @@ function placeholders(count: number, start = 1): string {
   return Array.from({ length: count }, (_, i) => `$${start + i}`).join(",");
 }
 
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 export type ClientProjectionRow = {
   partner: string;
   promedio_mensual: number;
+  /** 3-month average revenue (USD) for this client — read-only, from the imported sales. */
+  promedio_usd: number;
   proyeccion: number | null;
   precio: number | null;
   total: number;
@@ -29,8 +33,9 @@ export async function getClientProjections(
 ): Promise<ClientProjectionRow[]> {
   const closed = closedMonthsForPeriod(period);
 
-  const avgRows = await query<{ partner: string; cantidad: number }>(
-    `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner, SUM(cantidad) as cantidad
+  const avgRows = await query<{ partner: string; cantidad: number; ingreso: number }>(
+    `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner,
+            SUM(cantidad) as cantidad, SUM(ingreso_soles) as ingreso
      FROM sales
      WHERE vendedor = $1 AND producto_ref = $2 AND period IN (${placeholders(closed.length, 3)})
      GROUP BY partner`,
@@ -104,6 +109,7 @@ export async function getClientProjections(
 
   const partners = new Set<string>([...avgRows.map((r) => r.partner), ...savedByPartner.keys()]);
   const avgByPartner = new Map(avgRows.map((r) => [r.partner, Number(r.cantidad)]));
+  const avgIngresoByPartner = new Map(avgRows.map((r) => [r.partner, Number(r.ingreso)]));
   const denom = Math.max(closed.length, 1);
 
   const result: ClientProjectionRow[] = [];
@@ -115,7 +121,8 @@ export async function getClientProjections(
 
     const proyeccion =
       saved?.proyeccion_cantidad ?? carry?.proyeccion_cantidad ?? (promedio > 0 ? promedio : null);
-    const precio = saved?.precio ?? carry?.precio ?? priceByPartner.get(partner) ?? null;
+    const rawPrecio = saved?.precio ?? carry?.precio ?? priceByPartner.get(partner) ?? null;
+    const precio = rawPrecio !== null ? round2(rawPrecio) : null;
     const fijado_hasta = saved?.fijado_hasta ?? carry?.fijado_hasta ?? null;
 
     // Nothing saved for this partner yet this period — the row shown is a computed default.
@@ -127,6 +134,7 @@ export async function getClientProjections(
     result.push({
       partner,
       promedio_mensual: promedio,
+      promedio_usd: (avgIngresoByPartner.get(partner) ?? 0) / denom,
       proyeccion,
       precio,
       total: proyeccion != null && precio != null ? proyeccion * precio : 0,

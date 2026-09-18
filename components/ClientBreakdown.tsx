@@ -4,10 +4,21 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { formatQty, formatUsd } from "@/lib/format";
 import { saveClientProjectionAction, deleteClientProjectionAction } from "@/app/actions";
+import SortButton, { nextSort, type SortDir } from "./SortButton";
+
+type ClientSortKey = "promedio" | "promedioUsd" | "proyeccion" | "total";
+
+const SORT_VALUE: Record<ClientSortKey, (r: Row) => number> = {
+  promedio: (r) => r.promedio_mensual,
+  promedioUsd: (r) => r.promedio_usd,
+  proyeccion: (r) => r.proyeccion ?? -1,
+  total: (r) => r.total,
+};
 
 type Row = {
   partner: string;
   promedio_mensual: number;
+  promedio_usd: number;
   proyeccion: number | null;
   precio: number | null;
   total: number;
@@ -32,6 +43,7 @@ export default function ClientBreakdown({
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [addingClient, setAddingClient] = useState(false);
+  const [sort, setSort] = useState<{ key: ClientSortKey; dir: SortDir } | null>(null);
   const router = useRouter();
 
   function load(showLoading = false) {
@@ -62,12 +74,21 @@ export default function ClientBreakdown({
     if (!rows) return null;
     return rows.reduce(
       (acc, r) => ({
+        promedio: acc.promedio + r.promedio_mensual,
+        promedioUsd: acc.promedioUsd + r.promedio_usd,
         proyeccion: acc.proyeccion + (r.proyeccion ?? 0),
         total: acc.total + r.total,
       }),
-      { proyeccion: 0, total: 0 }
+      { promedio: 0, promedioUsd: 0, proyeccion: 0, total: 0 }
     );
   }, [rows]);
+
+  const sortedRows = useMemo(() => {
+    if (!rows || !sort) return rows;
+    const value = SORT_VALUE[sort.key];
+    const sign = sort.dir === "desc" ? -1 : 1;
+    return [...rows].sort((a, b) => sign * (value(a) - value(b)));
+  }, [rows, sort]);
 
   return (
     <div className="bg-surface-container-low px-4 py-3">
@@ -100,16 +121,39 @@ export default function ClientBreakdown({
                     Cliente
                   </th>
                   <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">
-                    Promedio
+                    <SortButton
+                      label="Promedio"
+                      active={sort?.key === "promedio"}
+                      dir={sort?.dir ?? "desc"}
+                      onClick={() => setSort((s) => nextSort(s, "promedio"))}
+                    />
+                  </th>
+                  <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">
+                    <SortButton
+                      label="Prom. US$"
+                      active={sort?.key === "promedioUsd"}
+                      dir={sort?.dir ?? "desc"}
+                      onClick={() => setSort((s) => nextSort(s, "promedioUsd"))}
+                    />
                   </th>
                   <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">
-                    Proyección
+                    <SortButton
+                      label="Proyección"
+                      active={sort?.key === "proyeccion"}
+                      dir={sort?.dir ?? "desc"}
+                      onClick={() => setSort((s) => nextSort(s, "proyeccion"))}
+                    />
                   </th>
                   <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">
                     Precio
                   </th>
                   <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">
-                    Total
+                    <SortButton
+                      label="Total"
+                      active={sort?.key === "total"}
+                      dir={sort?.dir ?? "desc"}
+                      onClick={() => setSort((s) => nextSort(s, "total"))}
+                    />
                   </th>
                   <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">
                     Fijar
@@ -117,7 +161,7 @@ export default function ClientBreakdown({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {(sortedRows ?? rows).map((r) => (
                   <ClientRow
                     key={r.partner}
                     row={r}
@@ -133,12 +177,17 @@ export default function ClientBreakdown({
               {totals && (
                 <tfoot>
                   <tr className="border-t border-outline-variant bg-surface-container-low font-medium">
-                    <td className="px-3 py-2 text-body-sm text-on-surface" colSpan={2}>
-                      Total producto
+                    <td className="px-3 py-2 text-body-sm text-on-surface">Total producto</td>
+                    <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface-variant">
+                      {formatQty(totals.promedio)}
                     </td>
-                    <td className="px-3 py-2 text-body-sm tabular-nums text-on-surface" colSpan={2}>
+                    <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface-variant">
+                      {formatUsd(totals.promedioUsd)}
+                    </td>
+                    <td className="px-3 py-2 text-body-sm tabular-nums text-on-surface">
                       {formatQty(totals.proyeccion)}
                     </td>
+                    <td className="px-3 py-2" />
                     <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface">
                       {formatUsd(totals.total)}
                     </td>
@@ -187,7 +236,7 @@ function ClientRow({
   onSaved: () => void;
 }) {
   const [proyeccion, setProyeccion] = useState(row.proyeccion?.toString() ?? "");
-  const [precio, setPrecio] = useState(row.precio?.toString() ?? "");
+  const [precio, setPrecio] = useState(row.precio !== null ? row.precio.toFixed(2) : "");
   const [fijadoHasta, setFijadoHasta] = useState(row.fijado_hasta ?? "");
   const [showDate, setShowDate] = useState(false);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -272,6 +321,9 @@ function ClientRow({
         <td className="px-3 py-1.5 text-right text-body-sm tabular-nums text-on-surface-variant">
           {formatQty(row.promedio_mensual)}
         </td>
+        <td className="px-3 py-1.5 text-right text-body-sm tabular-nums text-on-surface-variant">
+          {row.promedio_usd > 0 ? formatUsd(row.promedio_usd) : "—"}
+        </td>
         <td className="px-3 py-1.5">
           <div className="flex items-center gap-1.5">
             {editable ? (
@@ -317,7 +369,11 @@ function ClientRow({
               step="0.01"
               value={precio}
               onChange={(e) => setPrecio(e.target.value)}
-              onBlur={() => persist({ precio })}
+              onBlur={() => {
+                const rounded = precio.trim() === "" ? "" : (Math.round(Number(precio) * 100) / 100).toFixed(2);
+                setPrecio(rounded);
+                persist({ precio: rounded });
+              }}
               placeholder="US$"
               className="w-20 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
             />
@@ -371,7 +427,7 @@ function ClientRow({
       </tr>
       {overThreshold && (
         <tr className="border-b border-outline-variant last:border-b-0 bg-error-container">
-          <td colSpan={6} className="px-3 py-2">
+          <td colSpan={7} className="px-3 py-2">
             <p className="text-body-sm text-on-error-container">
               <strong>{row.partner}</strong> supera el 100% de su promedio ({formatQty(row.promedio_mensual)} →{" "}
               {formatQty(proyeccionNum)}).

@@ -8,6 +8,16 @@ import { deleteProductAction } from "@/app/actions";
 import EditableProjectionCells from "./EditableProjectionCells";
 import ClientBreakdown from "./ClientBreakdown";
 import AddProductForm from "./AddProductForm";
+import SortButton, { nextSort, type SortDir } from "./SortButton";
+
+type ProductSortKey = "promedio" | "promedioUsd" | "proyeccion" | "ingreso";
+
+const SORT_VALUE: Record<ProductSortKey, (r: ProductRow) => number> = {
+  promedio: (r) => r.promedio_mensual,
+  promedioUsd: (r) => r.promedio_usd,
+  proyeccion: (r) => r.proyeccion ?? -1,
+  ingreso: (r) => r.ingreso_proyectado,
+};
 
 export default function VendorSection({
   period,
@@ -28,6 +38,7 @@ export default function VendorSection({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [categoriaN2, setCategoriaN2] = useState("");
+  const [sort, setSort] = useState<{ key: ProductSortKey; dir: SortDir } | null>(null);
 
   const totals = useMemo(
     () => ({
@@ -53,8 +64,13 @@ export default function VendorSection({
         (r) => r.producto_nombre.toLowerCase().includes(q) || r.producto_ref.toLowerCase().includes(q)
       );
     }
+    if (sort) {
+      const value = SORT_VALUE[sort.key];
+      const sign = sort.dir === "desc" ? -1 : 1;
+      list = [...list].sort((a, b) => sign * (value(a) - value(b)));
+    }
     return list;
-  }, [rows, search, categoriaN2]);
+  }, [rows, search, categoriaN2, sort]);
 
   return (
     <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
@@ -145,10 +161,36 @@ export default function VendorSection({
                     Producto
                   </th>
                   <th className="px-3 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">
-                    Prom. mensual (3m)
+                    <SortButton
+                      label="Prom. mensual (3m)"
+                      active={sort?.key === "promedio"}
+                      dir={sort?.dir ?? "desc"}
+                      onClick={() => setSort((s) => nextSort(s, "promedio"))}
+                    />
+                  </th>
+                  <th className="px-3 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">
+                    <SortButton
+                      label="Prom. US$ (3m)"
+                      active={sort?.key === "promedioUsd"}
+                      dir={sort?.dir ?? "desc"}
+                      onClick={() => setSort((s) => nextSort(s, "promedioUsd"))}
+                    />
                   </th>
                   <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">
-                    Proyección
+                    <div className="flex items-center gap-3">
+                      <SortButton
+                        label="Proyección"
+                        active={sort?.key === "proyeccion"}
+                        dir={sort?.dir ?? "desc"}
+                        onClick={() => setSort((s) => nextSort(s, "proyeccion"))}
+                      />
+                      <SortButton
+                        label="US$"
+                        active={sort?.key === "ingreso"}
+                        dir={sort?.dir ?? "desc"}
+                        onClick={() => setSort((s) => nextSort(s, "ingreso"))}
+                      />
+                    </div>
                   </th>
                   <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">
                     Observaciones
@@ -199,6 +241,12 @@ export default function VendorSection({
                         >
                           {formatQty(row.promedio_mensual)}
                         </td>
+                        <td
+                          className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface-variant"
+                          onClick={() => setExpanded(isOpen ? null : key)}
+                        >
+                          {row.promedio_usd > 0 ? formatUsd(row.promedio_usd) : "—"}
+                        </td>
                         {editable ? (
                           <EditableProjectionCells
                             period={period}
@@ -248,7 +296,7 @@ export default function VendorSection({
                       </tr>
                       {isOpen && (
                         <tr className="border-b border-outline-variant last:border-b-0">
-                          <td colSpan={5} className="p-0">
+                          <td colSpan={6} className="p-0">
                             <ClientBreakdown
                               vendedor={vendedor}
                               producto_ref={row.producto_ref}
