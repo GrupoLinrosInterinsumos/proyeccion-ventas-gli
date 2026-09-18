@@ -5,6 +5,8 @@ import Link from "next/link";
 import { formatQty } from "@/lib/format";
 import { REGION_LABELS, type Region } from "@/lib/regions";
 import ClientBreakdown from "./ClientBreakdown";
+import UnitTag from "./UnitTag";
+import type { Unit } from "@/lib/units";
 
 type Row = { vendedor: string; region: Region; promedio_mensual: number; proyeccion: number | null };
 
@@ -12,10 +14,12 @@ export default function ProductVendorBreakdown({
   producto_ref,
   period,
   region,
+  unit = "kg",
 }: {
   producto_ref: string;
   period: string;
   region?: Region;
+  unit?: Unit;
 }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -83,11 +87,13 @@ export default function ProductVendorBreakdown({
                   <span className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-surface-container-highest">
                     <span className="block h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
                   </span>
-                  <span className="w-14 shrink-0 text-right text-body-sm font-medium tabular-nums text-on-surface">
+                  <span className="w-20 shrink-0 text-right text-body-sm font-medium tabular-nums text-on-surface">
                     {formatQty(r.promedio_mensual)}
+                    <UnitTag unit={unit} />
                   </span>
-                  <span className="w-20 shrink-0 text-right text-body-sm tabular-nums text-on-surface-variant">
+                  <span className="w-24 shrink-0 text-right text-body-sm tabular-nums text-on-surface-variant">
                     {r.proyeccion !== null ? formatQty(r.proyeccion) : "—"}
+                    {r.proyeccion !== null && <UnitTag unit={unit} />}
                   </span>
                   {delta !== null ? (
                     <span
@@ -114,6 +120,7 @@ export default function ProductVendorBreakdown({
                       producto_nombre={producto_ref}
                       period={period}
                       editable={false}
+                      unit={unit}
                     />
                   </li>
                 )}

@@ -1,6 +1,7 @@
 import { query, queryOne } from "./db";
 import { closedMonthsForPeriod, periodStatus } from "./period";
 import { productFamilyKey, parseSizeGrams } from "./product-family";
+import { refreshUntouchedPrices } from "./client-projections";
 import type { Region } from "./regions";
 
 function placeholders(count: number, start = 1): string {
@@ -89,6 +90,7 @@ export async function getVendorProductTable(
      FROM projections WHERE vendedor = $1 AND period = $2`,
     [vendedor, projectionPeriod]
   );
+  if (periodStatus(projectionPeriod) === "open") await refreshUntouchedPrices(projectionPeriod, vendedor);
   const revenueByRef = await revenueByProduct(projectionPeriod, vendedor);
   const clientQtyByRef = await clientQtySumByProduct(projectionPeriod, vendedor);
 

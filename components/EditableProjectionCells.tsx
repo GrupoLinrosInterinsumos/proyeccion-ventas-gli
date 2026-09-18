@@ -3,6 +3,8 @@
 import { useState, useTransition } from "react";
 import { saveProjectionAction } from "@/app/actions";
 import { formatQty, formatUsd } from "@/lib/format";
+import type { Unit } from "@/lib/units";
+import UnitTag from "./UnitTag";
 
 export default function EditableProjectionCells({
   period,
@@ -13,6 +15,7 @@ export default function EditableProjectionCells({
   initialObservaciones,
   promedio,
   ingresoProyectado,
+  unit,
 }: {
   period: string;
   vendedor: string;
@@ -22,6 +25,7 @@ export default function EditableProjectionCells({
   initialObservaciones: string | null;
   promedio: number;
   ingresoProyectado: number;
+  unit: Unit;
 }) {
   const [observaciones, setObservaciones] = useState(initialObservaciones ?? "");
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -57,6 +61,7 @@ export default function EditableProjectionCells({
         <div className="flex items-center gap-2">
           <span className="text-body-sm tabular-nums text-on-surface">
             {initialProyeccion !== null ? formatQty(initialProyeccion) : "—"}
+            {initialProyeccion !== null && <UnitTag unit={unit} />}
           </span>
           {delta !== null && (
             <span

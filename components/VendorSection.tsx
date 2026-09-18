@@ -9,6 +9,8 @@ import EditableProjectionCells from "./EditableProjectionCells";
 import ClientBreakdown from "./ClientBreakdown";
 import AddProductForm from "./AddProductForm";
 import SortButton, { nextSort, type SortDir } from "./SortButton";
+import UnitTag from "./UnitTag";
+import { unitForCategoria } from "@/lib/units";
 
 type ProductSortKey = "promedio" | "promedioUsd" | "proyeccion" | "ingreso";
 
@@ -240,6 +242,7 @@ export default function VendorSection({
                           onClick={() => setExpanded(isOpen ? null : key)}
                         >
                           {formatQty(row.promedio_mensual)}
+                          <UnitTag unit={unitForCategoria(row.categoria_n2)} />
                         </td>
                         <td
                           className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface-variant"
@@ -257,12 +260,16 @@ export default function VendorSection({
                             initialObservaciones={row.observaciones}
                             promedio={row.promedio_mensual}
                             ingresoProyectado={row.ingreso_proyectado}
+                            unit={unitForCategoria(row.categoria_n2)}
                           />
                         ) : (
                           <>
                             <td className="px-3 py-2 text-body-sm tabular-nums text-on-surface">
                               <div className="flex items-center gap-1.5">
-                                <span>{row.proyeccion !== null ? formatQty(row.proyeccion) : "—"}</span>
+                                <span>
+                                  {row.proyeccion !== null ? formatQty(row.proyeccion) : "—"}
+                                  {row.proyeccion !== null && <UnitTag unit={unitForCategoria(row.categoria_n2)} />}
+                                </span>
                                 {row.proyeccion !== null && row.promedio_mensual > 0 && (() => {
                                   const delta = (row.proyeccion - row.promedio_mensual) / row.promedio_mensual;
                                   return (
@@ -303,6 +310,7 @@ export default function VendorSection({
                               producto_nombre={row.producto_nombre}
                               period={period}
                               editable={editable}
+                              unit={unitForCategoria(row.categoria_n2)}
                             />
                           </td>
                         </tr>

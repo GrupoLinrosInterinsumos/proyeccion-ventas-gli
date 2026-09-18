@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { formatQty, formatUsd } from "@/lib/format";
 import { saveClientProjectionAction, deleteClientProjectionAction } from "@/app/actions";
 import SortButton, { nextSort, type SortDir } from "./SortButton";
+import UnitTag from "./UnitTag";
+import type { Unit } from "@/lib/units";
 
 type ClientSortKey = "promedio" | "promedioUsd" | "proyeccion" | "total";
 
@@ -33,12 +35,14 @@ export default function ClientBreakdown({
   producto_nombre,
   period,
   editable,
+  unit = "kg",
 }: {
   vendedor: string;
   producto_ref: string;
   producto_nombre: string;
   period: string;
   editable: boolean;
+  unit?: Unit;
 }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -170,6 +174,7 @@ export default function ClientBreakdown({
                     producto_nombre={producto_nombre}
                     period={period}
                     editable={editable}
+                    unit={unit}
                     onSaved={reload}
                   />
                 ))}
@@ -180,12 +185,14 @@ export default function ClientBreakdown({
                     <td className="px-3 py-2 text-body-sm text-on-surface">Total producto</td>
                     <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface-variant">
                       {formatQty(totals.promedio)}
+                      <UnitTag unit={unit} />
                     </td>
                     <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface-variant">
                       {formatUsd(totals.promedioUsd)}
                     </td>
                     <td className="px-3 py-2 text-body-sm tabular-nums text-on-surface">
                       {formatQty(totals.proyeccion)}
+                      <UnitTag unit={unit} />
                     </td>
                     <td className="px-3 py-2" />
                     <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface">
@@ -225,6 +232,7 @@ function ClientRow({
   producto_nombre,
   period,
   editable,
+  unit,
   onSaved,
 }: {
   row: Row;
@@ -233,6 +241,7 @@ function ClientRow({
   producto_nombre: string;
   period: string;
   editable: boolean;
+  unit: Unit;
   onSaved: () => void;
 }) {
   const [proyeccion, setProyeccion] = useState(row.proyeccion?.toString() ?? "");
@@ -320,6 +329,7 @@ function ClientRow({
         </td>
         <td className="px-3 py-1.5 text-right text-body-sm tabular-nums text-on-surface-variant">
           {formatQty(row.promedio_mensual)}
+          <UnitTag unit={unit} />
         </td>
         <td className="px-3 py-1.5 text-right text-body-sm tabular-nums text-on-surface-variant">
           {row.promedio_usd > 0 ? formatUsd(row.promedio_usd) : "—"}
@@ -342,8 +352,12 @@ function ClientRow({
                 className="w-20 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
             ) : (
-              <span className="text-body-sm tabular-nums text-on-surface">{formatQty(proyeccionNum)}</span>
+              <span className="text-body-sm tabular-nums text-on-surface">
+                {formatQty(proyeccionNum)}
+                {proyeccionNum !== null && <UnitTag unit={unit} />}
+              </span>
             )}
+            {editable && <UnitTag unit={unit} />}
             {delta !== null && (
               <span
                 className={`shrink-0 rounded px-1.5 py-0.5 text-label-sm font-medium ${

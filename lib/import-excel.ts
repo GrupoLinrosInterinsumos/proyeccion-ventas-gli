@@ -19,7 +19,7 @@ export type AggregatedSaleRow = {
   precio_unitario: number;
 };
 
-type InternalAggregatedRow = AggregatedSaleRow & { precioPonderadoSum: number };
+type InternalAggregatedRow = AggregatedSaleRow & { precioPonderadoSum: number; cantidadConPrecio: number };
 
 export type ParseResult = {
   rows: AggregatedSaleRow[];
@@ -182,6 +182,7 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
       existing.cantidad += cantidad;
       existing.ingreso_soles += ingreso;
       existing.precioPonderadoSum += precioUnitarioRaw * cantidad;
+      if (precioUnitarioRaw > 0) existing.cantidadConPrecio += cantidad;
     } else {
       aggregated.set(key, {
         period,
@@ -197,6 +198,7 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
         ingreso_soles: ingreso,
         precio_unitario: 0,
         precioPonderadoSum: precioUnitarioRaw * cantidad,
+        cantidadConPrecio: precioUnitarioRaw > 0 ? cantidad : 0,
       });
     }
   }
@@ -216,10 +218,12 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     throw new Error("No se encontraron filas válidas para importar.");
   }
 
-  const rows: AggregatedSaleRow[] = [...aggregated.values()].map(({ precioPonderadoSum, ...row }) => ({
-    ...row,
-    precio_unitario: row.cantidad > 0 ? precioPonderadoSum / row.cantidad : 0,
-  }));
+  const rows: AggregatedSaleRow[] = [...aggregated.values()].map(
+    ({ precioPonderadoSum, cantidadConPrecio, ...row }) => ({
+      ...row,
+      precio_unitario: cantidadConPrecio > 0 ? precioPonderadoSum / cantidadConPrecio : 0,
+    })
+  );
 
   return {
     rows,

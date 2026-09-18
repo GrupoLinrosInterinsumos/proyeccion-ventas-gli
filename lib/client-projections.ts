@@ -42,20 +42,20 @@ export async function getClientProjections(
     [vendedor, producto_ref, ...closed]
   );
 
-  // Unit price per client (USD): prefer the "P. Unitario $" column from the import, weighted by
-  // quantity, since it's the actual negotiated price — falling back to ingreso/cantidad for older
-  // rows imported before that column existed. Uses the most recent closed month the client
-  // actually bought in, not necessarily the single latest month in the 3-month window.
+  // Unit price per client (USD): always the "P. Unitario $" column from the import, weighted by
+  // quantity over the lines that actually carry a price — never derived from revenue, which on
+  // older imports could be in another currency. Uses the most recent closed month the client
+  // bought in with a price, not necessarily the single latest month in the 3-month window. A
+  // client with no priced sales in the window simply has no default price.
   const priceRows = closed.length
     ? await query<{
         partner: string;
         period: string;
-        cantidad: number;
-        ingreso: number;
+        cantidadConPrecio: number;
         precioPonderado: number;
       }>(
         `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner, period,
-                SUM(cantidad) as cantidad, SUM(ingreso_soles) as ingreso,
+                SUM(CASE WHEN precio_unitario > 0 THEN cantidad ELSE 0 END) as "cantidadConPrecio",
                 SUM(precio_unitario * cantidad) as "precioPonderado"
          FROM sales
          WHERE vendedor = $1 AND producto_ref = $2 AND period IN (${placeholders(closed.length, 3)})
@@ -65,17 +65,15 @@ export async function getClientProjections(
     : [];
   const latestPriceByPartner = new Map<string, string>();
   for (const row of priceRows) {
-    if (Number(row.cantidad) <= 0) continue;
+    if (Number(row.cantidadConPrecio) <= 0) continue;
     const latest = latestPriceByPartner.get(row.partner);
     if (!latest || row.period > latest) latestPriceByPartner.set(row.partner, row.period);
   }
   const priceByPartner = new Map<string, number>();
   for (const row of priceRows) {
-    if (Number(row.cantidad) <= 0) continue;
+    if (Number(row.cantidadConPrecio) <= 0) continue;
     if (latestPriceByPartner.get(row.partner) === row.period) {
-      const cantidad = Number(row.cantidad);
-      const precioPonderado = Number(row.precioPonderado);
-      priceByPartner.set(row.partner, precioPonderado > 0 ? precioPonderado / cantidad : Number(row.ingreso) / cantidad);
+      priceByPartner.set(row.partner, Number(row.precioPonderado) / Number(row.cantidadConPrecio));
     }
   }
 
@@ -86,8 +84,10 @@ export async function getClientProjections(
     fijado_hasta: string | null;
     alert_acknowledged: boolean;
     is_manual: boolean;
+    untouched: boolean;
   }>(
     `SELECT partner, proyeccion_cantidad, precio, fijado_hasta::text as fijado_hasta, alert_acknowledged,
+            (updated_by IS NULL AND fijado_hasta IS NULL) as untouched,
             (partner NOT IN (SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado')
                               FROM sales WHERE vendedor = $1 AND producto_ref = $2)) as is_manual
      FROM client_projections WHERE vendedor = $1 AND producto_ref = $2 AND period = $3`,
@@ -114,6 +114,7 @@ export async function getClientProjections(
 
   const result: ClientProjectionRow[] = [];
   const freshDefaults: { partner: string; proyeccion: number | null; precio: number | null; fijado_hasta: string | null }[] = [];
+  let stalePrices = false;
   for (const partner of partners) {
     const promedio = Math.round((avgByPartner.get(partner) ?? 0) / denom);
     const saved = savedByPartner.get(partner);
@@ -121,9 +122,19 @@ export async function getClientProjections(
 
     const proyeccion =
       saved?.proyeccion_cantidad ?? carry?.proyeccion_cantidad ?? (promedio > 0 ? promedio : null);
-    const rawPrecio = saved?.precio ?? carry?.precio ?? priceByPartner.get(partner) ?? null;
+    const importedPrecio = priceByPartner.get(partner);
+    // A saved row nobody ever edited (system-materialized default, not pinned) always follows
+    // the current P. Unitario price — this also replaces defaults saved by the old ingreso/cantidad
+    // method. Anything a person typed, or a pinned row, keeps its own value.
+    const rawPrecio = saved?.untouched
+      ? (importedPrecio ?? null)
+      : (saved?.precio ?? carry?.precio ?? importedPrecio ?? null);
     const precio = rawPrecio !== null ? round2(rawPrecio) : null;
     const fijado_hasta = saved?.fijado_hasta ?? carry?.fijado_hasta ?? null;
+
+    if (saved?.untouched && (saved.precio === null ? null : round2(saved.precio)) !== precio) {
+      stalePrices = true;
+    }
 
     // Nothing saved for this partner yet this period — the row shown is a computed default.
     // Persist it now so totals/exports/dashboard reflect it without requiring an explicit edit.
@@ -158,8 +169,49 @@ export async function getClientProjections(
     await materializeClientDefaults(period, vendedor, producto_ref, producto_nombre, freshDefaults);
   }
 
+  if (stalePrices && periodStatus(period) === "open") {
+    await refreshUntouchedPrices(period, vendedor);
+  }
+
   result.sort((a, b) => b.promedio_mensual - a.promedio_mensual);
   return result;
+}
+
+/**
+ * Re-points every untouched (never edited, not pinned) client price for a vendedor+period at the
+ * current P. Unitario price — most recent closed month with a priced sale, weighted by quantity,
+ * rounded to cents; NULL when there's none. Fixes defaults saved before prices came only from
+ * that column. Dashboard/export revenue reads these stored prices, so this keeps them consistent
+ * without needing each product to be opened first.
+ */
+export async function refreshUntouchedPrices(period: string, vendedor: string): Promise<void> {
+  const closed = closedMonthsForPeriod(period);
+  if (closed.length === 0) return;
+  await query(
+    `UPDATE client_projections cp
+     SET precio = p.precio, updated_at = now()
+     FROM (
+       SELECT cp2.id,
+              (SELECT ROUND((pp.pond / pp.qty)::numeric, 2)::double precision
+               FROM (
+                 SELECT s.period,
+                        SUM(s.precio_unitario * s.cantidad) AS pond,
+                        SUM(CASE WHEN s.precio_unitario > 0 THEN s.cantidad ELSE 0 END) AS qty
+                 FROM sales s
+                 WHERE s.vendedor = cp2.vendedor AND s.producto_ref = cp2.producto_ref
+                   AND COALESCE(NULLIF(TRIM(s.partner), ''), 'Sin cliente registrado') = cp2.partner
+                   AND s.period IN (${placeholders(closed.length, 3)})
+                 GROUP BY s.period
+                 HAVING SUM(CASE WHEN s.precio_unitario > 0 THEN s.cantidad ELSE 0 END) > 0
+                 ORDER BY s.period DESC
+                 LIMIT 1
+               ) pp) AS precio
+       FROM client_projections cp2
+       WHERE cp2.period = $1 AND cp2.vendedor = $2 AND cp2.updated_by IS NULL AND cp2.fijado_hasta IS NULL
+     ) p
+     WHERE cp.id = p.id AND cp.precio IS DISTINCT FROM p.precio`,
+    [period, vendedor, ...closed]
+  );
 }
 
 /** Persists computed default rows (never explicitly saved) so they become real, queryable data. */

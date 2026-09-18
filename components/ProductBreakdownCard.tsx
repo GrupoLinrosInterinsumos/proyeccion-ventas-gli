@@ -5,6 +5,8 @@ import { formatQty } from "@/lib/format";
 import type { ProductBreakdownRow } from "@/lib/sales";
 import type { Region } from "@/lib/regions";
 import ProductVendorBreakdown from "./ProductVendorBreakdown";
+import UnitTag from "./UnitTag";
+import { unitForCategoria } from "@/lib/units";
 
 export default function ProductBreakdownCard({
   products,
@@ -57,6 +59,7 @@ export default function ProductBreakdownCard({
                     <div className="shrink-0 text-right">
                       <p className="text-body-sm font-semibold tabular-nums text-on-surface">
                         {formatQty(p.promedio_mensual)}
+                        <UnitTag unit={unitForCategoria(p.categoria_n2)} />
                       </p>
                     </div>
                   </div>
@@ -68,7 +71,12 @@ export default function ProductBreakdownCard({
                   </span>
                 </li>
                 {isOpen && (
-                  <ProductVendorBreakdown producto_ref={p.producto_ref} period={period} region={region} />
+                  <ProductVendorBreakdown
+                    producto_ref={p.producto_ref}
+                    period={period}
+                    region={region}
+                    unit={unitForCategoria(p.categoria_n2)}
+                  />
                 )}
               </Fragment>
             );
