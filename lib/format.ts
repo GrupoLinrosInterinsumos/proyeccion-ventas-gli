@@ -14,6 +14,14 @@ export function formatQty(value: number | null | undefined): string {
   return numberFormatter.format(Math.round(value));
 }
 
+/** "1,234 kg · 56 und" — kilograms and units shown apart, omitting a zero part. */
+export function formatQtySplit(q: { kg: number; und: number }): string {
+  const parts: string[] = [];
+  if (Math.round(q.kg) !== 0) parts.push(`${formatQty(q.kg)} kg`);
+  if (Math.round(q.und) !== 0) parts.push(`${formatQty(q.und)} und`);
+  return parts.length > 0 ? parts.join(" · ") : "0 kg";
+}
+
 /** Everything in this system is denominated in USD, regardless of what the source Excel column says. */
 export function formatUsd(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";

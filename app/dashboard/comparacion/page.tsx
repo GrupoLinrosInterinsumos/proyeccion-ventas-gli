@@ -4,8 +4,28 @@ import { getSession } from "@/lib/auth";
 import { getPeriodComparisonBreakdown, type PeriodComparisonRow } from "@/lib/sales";
 import { openProjectionPeriod, closedMonthsForPeriod, periodStatus, periodLabel, listRecentPeriods } from "@/lib/period";
 import { isRegion, REGION_LABELS, type Region } from "@/lib/regions";
-import { formatQty } from "@/lib/format";
+import { formatQty, formatQtySplit, formatUsd } from "@/lib/format";
+import { addQty, emptyQty, isExcedido, qtyDelta } from "@/lib/units";
 import TopNav from "@/components/TopNav";
+import UnitTag from "@/components/UnitTag";
+
+function sumRows(rows: PeriodComparisonRow[]) {
+  const proyectado = emptyQty();
+  const real = emptyQty();
+  let proyectadoUsd = 0;
+  let realUsd = 0;
+  for (const r of rows) {
+    addQty(proyectado, r.unidad, r.proyectado);
+    addQty(real, r.unidad, r.real);
+    proyectadoUsd += r.proyectado_usd;
+    realUsd += r.real_usd;
+  }
+  return { proyectado, real, proyectadoUsd, realUsd };
+}
+
+function changePct(proyectado: number, real: number): number | null {
+  return proyectado > 0 ? ((real - proyectado) / proyectado) * 100 : null;
+}
 
 export default async function ComparacionPage({
   searchParams,
@@ -41,11 +61,10 @@ export default async function ComparacionPage({
   };
 
   const rows = await getPeriodComparisonBreakdown(targetPeriod, filters);
-  const totals = rows.reduce(
-    (acc, r) => ({ proyectado: acc.proyectado + r.proyectado, real: acc.real + r.real }),
-    { proyectado: 0, real: 0 }
-  );
-  const excedido = totals.proyectado > 0 && totals.real > totals.proyectado * 2;
+  const totals = sumRows(rows);
+  const excedido = isExcedido(totals.proyectado, totals.real);
+  const qtyChange = qtyDelta(totals.proyectado, totals.real);
+  const usdChange = changePct(totals.proyectadoUsd, totals.realUsd);
   const groupByVendedor = !vendedor; // admin viewing everyone — organize the detail by vendedor.
 
   const closedPeriods = listRecentPeriods(8).filter((p) => p.status === "closed");
@@ -84,20 +103,18 @@ export default async function ComparacionPage({
           ))}
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <SummaryCard label="Proyectado" value={formatQty(totals.proyectado)} />
-          <SummaryCard label="Real" value={formatQty(totals.real)} alert={excedido} />
-          <SummaryCard
-            label="Variación"
-            value={
-              totals.proyectado > 0
-                ? `${totals.real >= totals.proyectado ? "+" : ""}${Math.round(
-                    ((totals.real - totals.proyectado) / totals.proyectado) * 100
-                  )}%`
-                : "—"
-            }
-            alert={excedido}
-          />
+        <h2 className="mt-6 text-label-md uppercase tracking-wide text-on-surface-variant">Cantidad</h2>
+        <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <SummaryCard label="Proyectado" value={formatQtySplit(totals.proyectado)} />
+          <SummaryCard label="Real" value={formatQtySplit(totals.real)} alert={excedido} />
+          <SummaryCard label="Variación" value={formatChange(qtyChange === null ? null : qtyChange * 100)} alert={excedido} />
+        </div>
+
+        <h2 className="mt-6 text-label-md uppercase tracking-wide text-on-surface-variant">Dólares</h2>
+        <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <SummaryCard label="Proyectado" value={formatUsd(totals.proyectadoUsd)} />
+          <SummaryCard label="Real" value={formatUsd(totals.realUsd)} />
+          <SummaryCard label="Variación" value={formatChange(usdChange)} />
         </div>
 
         {excedido && (
@@ -124,6 +141,15 @@ export default async function ComparacionPage({
   );
 }
 
+function formatChange(pct: number | null): string {
+  if (pct === null) return "—";
+  return `${pct >= 0 ? "+" : ""}${Math.round(pct)}%`;
+}
+
+// Every product of every vendedor is thousands of rows — each block shows the ones that moved
+// the most (in dollars); the totals in its header still add up all of them.
+const MAX_ROWS_PER_GROUP = 25;
+
 function VendedorGroups({ rows }: { rows: PeriodComparisonRow[] }) {
   const byVendedor = new Map<string, PeriodComparisonRow[]>();
   for (const r of rows) {
@@ -134,17 +160,21 @@ function VendedorGroups({ rows }: { rows: PeriodComparisonRow[] }) {
   const groups = [...byVendedor.entries()]
     .map(([vendedor, items]) => ({
       vendedor,
-      items,
-      proyectado: items.reduce((s, r) => s + r.proyectado, 0),
-      real: items.reduce((s, r) => s + r.real, 0),
+      total: items.length,
+      items: [...items]
+        .sort((a, b) => Math.abs(b.real_usd - b.proyectado_usd) - Math.abs(a.real_usd - a.proyectado_usd))
+        .slice(0, MAX_ROWS_PER_GROUP),
+      ...sumRows(items),
     }))
-    .sort((a, b) => b.real - b.proyectado - (a.real - a.proyectado));
+    .sort((a, b) => b.realUsd - b.proyectadoUsd - (a.realUsd - a.proyectadoUsd));
 
   return (
     <div className="mt-6 flex flex-col gap-4">
       {groups.map((g) => {
-        const delta = g.proyectado > 0 ? ((g.real - g.proyectado) / g.proyectado) * 100 : null;
-        const groupExcedido = g.proyectado > 0 && g.real > g.proyectado * 2;
+        const qtyChange = qtyDelta(g.proyectado, g.real);
+        const usdChange = changePct(g.proyectadoUsd, g.realUsd);
+        const groupExcedido = isExcedido(g.proyectado, g.real);
+        const muted = groupExcedido ? "text-on-error-container" : "text-on-surface-variant";
         return (
           <section
             key={g.vendedor}
@@ -160,27 +190,24 @@ function VendedorGroups({ rows }: { rows: PeriodComparisonRow[] }) {
               >
                 {g.vendedor}
               </h2>
-              <div className="flex items-center gap-3 text-body-sm">
-                <span className={groupExcedido ? "text-on-error-container" : "text-on-surface-variant"}>
-                  {formatQty(g.real)} / {formatQty(g.proyectado)} proyectado
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-body-sm">
+                <span className={`flex items-center gap-2 ${muted}`}>
+                  {formatQtySplit(g.real)} / {formatQtySplit(g.proyectado)} proy.
+                  <ChangeBadge pct={qtyChange === null ? null : qtyChange * 100} red={groupExcedido} />
                 </span>
-                {delta !== null && (
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-label-sm font-medium ${
-                      groupExcedido
-                        ? "bg-on-error-container/15 text-on-error-container"
-                        : delta >= 0
-                          ? "bg-tertiary-fixed text-on-tertiary-fixed-variant"
-                          : "bg-secondary-fixed text-on-secondary-fixed-variant"
-                    }`}
-                  >
-                    {delta >= 0 ? "+" : ""}
-                    {Math.round(delta)}%
-                  </span>
-                )}
+                <span className={`flex items-center gap-2 ${muted}`}>
+                  {formatUsd(g.realUsd)} / {formatUsd(g.proyectadoUsd)} proy.
+                  <ChangeBadge pct={usdChange} />
+                </span>
               </div>
             </div>
             <ComparisonTable rows={g.items} showVendedor={false} />
+            {g.total > g.items.length && (
+              <p className="border-t border-outline-variant px-5 py-2 text-label-sm text-on-surface-variant">
+                Mostrando los {g.items.length} productos con más diferencia de {g.total}. Filtra por vendedor para
+                verlos todos.
+              </p>
+            )}
           </section>
         );
       })}
@@ -188,36 +215,49 @@ function VendedorGroups({ rows }: { rows: PeriodComparisonRow[] }) {
   );
 }
 
+function ChangeBadge({ pct, red = false }: { pct: number | null; red?: boolean }) {
+  if (pct === null) return <span className="text-body-sm text-on-surface-variant">—</span>;
+  return (
+    <span
+      className={`rounded px-1.5 py-0.5 text-label-sm font-medium ${
+        red
+          ? "bg-on-error-container/15 text-on-error-container"
+          : pct >= 0
+            ? "bg-tertiary-fixed text-on-tertiary-fixed-variant"
+            : "bg-secondary-fixed text-on-secondary-fixed-variant"
+      }`}
+    >
+      {pct >= 0 ? "+" : ""}
+      {Math.round(pct)}%
+    </span>
+  );
+}
+
 function ComparisonTable({ rows, showVendedor }: { rows: PeriodComparisonRow[]; showVendedor: boolean }) {
+  const th = "px-4 py-2 text-label-md uppercase tracking-wide text-on-surface-variant";
   return (
     <div className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
       <div className="thin-scroll overflow-x-auto">
         <table className="w-full border-collapse">
           <thead>
             <tr className="border-b border-outline-variant bg-surface-container-low">
-              {showVendedor && (
-                <th className="px-5 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">
-                  Vendedor
-                </th>
-              )}
-              <th className="px-5 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">
-                Producto
-              </th>
-              <th className="px-5 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">
-                Proyectado
-              </th>
-              <th className="px-5 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">
-                Real
-              </th>
-              <th className="px-5 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">
-                Variación
-              </th>
+              {showVendedor && <th className={`${th} text-left`}>Vendedor</th>}
+              <th className={`${th} text-left`}>Producto</th>
+              <th className={`${th} text-right`}>Proyectado</th>
+              <th className={`${th} text-right`}>Real</th>
+              <th className={`${th} text-right`}>Var.</th>
+              <th className={`${th} text-right`}>Proy. US$</th>
+              <th className={`${th} text-right`}>Real US$</th>
+              <th className={`${th} text-right`}>Var. US$</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
-              const delta = r.proyectado > 0 ? ((r.real - r.proyectado) / r.proyectado) * 100 : null;
+              const qty = changePct(r.proyectado, r.real);
+              const usd = changePct(r.proyectado_usd, r.real_usd);
               const rowExcedido = r.proyectado > 0 && r.real > r.proyectado * 2;
+              const cell = rowExcedido ? "text-on-error-container" : "text-on-surface";
+              const cellMuted = rowExcedido ? "text-on-error-container" : "text-on-surface-variant";
               return (
                 <tr
                   key={`${r.vendedor}::${r.producto_ref}`}
@@ -225,45 +265,27 @@ function ComparisonTable({ rows, showVendedor }: { rows: PeriodComparisonRow[]; 
                     rowExcedido ? "bg-error-container" : "hover:bg-surface-container-low"
                   }`}
                 >
-                  {showVendedor && (
-                    <td
-                      className={`px-5 py-3 text-body-sm ${rowExcedido ? "text-on-error-container" : "text-on-surface"}`}
-                    >
-                      {r.vendedor}
-                    </td>
-                  )}
-                  <td
-                    className={`px-5 py-3 text-body-sm ${rowExcedido ? "text-on-error-container" : "text-on-surface"}`}
-                  >
-                    {r.producto_nombre}
-                  </td>
-                  <td
-                    className={`px-5 py-3 text-right text-body-sm tabular-nums ${rowExcedido ? "text-on-error-container" : "text-on-surface-variant"}`}
-                  >
+                  {showVendedor && <td className={`px-4 py-3 text-body-sm ${cell}`}>{r.vendedor}</td>}
+                  <td className={`px-4 py-3 text-body-sm ${cell}`}>{r.producto_nombre}</td>
+                  <td className={`px-4 py-3 text-right text-body-sm tabular-nums ${cellMuted}`}>
                     {formatQty(r.proyectado)}
+                    <UnitTag unit={r.unidad} />
                   </td>
-                  <td
-                    className={`px-5 py-3 text-right text-body-sm font-medium tabular-nums ${rowExcedido ? "text-on-error-container" : "text-on-surface"}`}
-                  >
+                  <td className={`px-4 py-3 text-right text-body-sm font-medium tabular-nums ${cell}`}>
                     {formatQty(r.real)}
+                    <UnitTag unit={r.unidad} />
                   </td>
-                  <td className="px-5 py-3 text-right">
-                    {delta !== null ? (
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-label-sm font-medium ${
-                          rowExcedido
-                            ? "bg-on-error-container/15 text-on-error-container"
-                            : delta >= 0
-                              ? "bg-tertiary-fixed text-on-tertiary-fixed-variant"
-                              : "bg-secondary-fixed text-on-secondary-fixed-variant"
-                        }`}
-                      >
-                        {delta >= 0 ? "+" : ""}
-                        {Math.round(delta)}%
-                      </span>
-                    ) : (
-                      <span className="text-body-sm text-on-surface-variant">—</span>
-                    )}
+                  <td className="px-4 py-3 text-right">
+                    <ChangeBadge pct={qty} red={rowExcedido} />
+                  </td>
+                  <td className={`px-4 py-3 text-right text-body-sm tabular-nums ${cellMuted}`}>
+                    {formatUsd(r.proyectado_usd)}
+                  </td>
+                  <td className={`px-4 py-3 text-right text-body-sm font-medium tabular-nums ${cell}`}>
+                    {formatUsd(r.real_usd)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <ChangeBadge pct={usd} red={rowExcedido} />
                   </td>
                 </tr>
               );
@@ -285,7 +307,7 @@ function SummaryCard({ label, value, alert }: { label: string; value: string; al
       <p className={`text-label-md uppercase tracking-wide ${alert ? "text-on-error-container" : "text-on-surface-variant"}`}>
         {label}
       </p>
-      <p className={`mt-2 text-headline-lg ${alert ? "text-on-error-container" : "text-on-surface"}`}>{value}</p>
+      <p className={`mt-2 text-headline-md ${alert ? "text-on-error-container" : "text-on-surface"}`}>{value}</p>
     </div>
   );
 }

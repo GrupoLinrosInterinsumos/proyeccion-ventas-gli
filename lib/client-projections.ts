@@ -354,3 +354,108 @@ export async function deleteClientProjection(params: {
     params.updatedBy
   );
 }
+
+/**
+ * Creates the default projection of every vendedor for the open period in one set-based pass:
+ * each client's proyección is their 3-month average (rounded), their price the latest P. Unitario
+ * they had, and each product's proyección the sum of its clients. A still-pinned "fijado" row from
+ * an earlier period carries over first. Existing rows — anything edited, pinned, or already
+ * materialized — are never overwritten, so dashboard totals no longer depend on whose page was
+ * opened. `rebuild` first drops the untouched (never edited, not pinned) defaults so they follow
+ * freshly imported sales, e.g. right after uploading a report.
+ */
+export async function ensureOpenPeriodDefaults(period: string, opts: { rebuild?: boolean } = {}): Promise<void> {
+  if (periodStatus(period) !== "open") return;
+  const closed = closedMonthsForPeriod(period);
+  if (closed.length === 0) return;
+  const inClosed = placeholders(closed.length, 2);
+  const denom = Math.max(closed.length, 1);
+
+  if (!opts.rebuild) {
+    // Cheap guard: nothing to do once every vendedor with recent sales already has projections.
+    const missing = await queryOne<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM (
+         SELECT DISTINCT vendedor FROM sales WHERE period IN (${inClosed})
+         EXCEPT
+         SELECT DISTINCT vendedor FROM projections WHERE period = $1
+       ) m`,
+      [period, ...closed]
+    );
+    if (!missing || missing.n === 0) return;
+  } else {
+    await query(
+      `DELETE FROM client_projections WHERE period = $1 AND updated_by IS NULL AND fijado_hasta IS NULL`,
+      [period]
+    );
+  }
+
+  // 1. Pinned clients from earlier periods keep their pinned values.
+  await query(
+    `INSERT INTO client_projections
+       (period, vendedor, producto_ref, producto_nombre, partner, proyeccion_cantidad, precio, fijado_hasta, updated_at)
+     SELECT DISTINCT ON (vendedor, producto_ref, partner)
+            $1::text, vendedor, producto_ref, producto_nombre, partner, proyeccion_cantidad, precio, fijado_hasta, now()
+     FROM client_projections
+     WHERE period < $1 AND fijado_hasta IS NOT NULL AND fijado_hasta >= $2::date
+     ORDER BY vendedor, producto_ref, partner, updated_at DESC
+     ON CONFLICT (period, vendedor, producto_ref, partner) DO NOTHING`,
+    [period, `${period}-01`]
+  );
+
+  // 2. Everyone else: 3-month average quantity, latest priced P. Unitario.
+  await query(
+    `WITH s AS (
+       SELECT vendedor, producto_ref, producto_nombre, period, precio_unitario, cantidad,
+              COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') AS partner
+       FROM sales WHERE period IN (${inClosed})
+     ), base AS (
+       SELECT vendedor, producto_ref, partner, MAX(producto_nombre) AS producto_nombre, SUM(cantidad) AS qty
+       FROM s GROUP BY vendedor, producto_ref, partner
+     ), per AS (
+       SELECT vendedor, producto_ref, partner, period,
+              SUM(precio_unitario * cantidad) AS pond,
+              SUM(CASE WHEN precio_unitario > 0 THEN cantidad ELSE 0 END) AS pq
+       FROM s GROUP BY vendedor, producto_ref, partner, period
+       HAVING SUM(CASE WHEN precio_unitario > 0 THEN cantidad ELSE 0 END) > 0
+     ), pr AS (
+       SELECT DISTINCT ON (vendedor, producto_ref, partner) vendedor, producto_ref, partner,
+              ROUND((pond / pq)::numeric, 2)::double precision AS precio
+       FROM per ORDER BY vendedor, producto_ref, partner, period DESC
+     )
+     INSERT INTO client_projections
+       (period, vendedor, producto_ref, producto_nombre, partner, proyeccion_cantidad, precio, updated_at)
+     SELECT $1::text, b.vendedor, b.producto_ref, b.producto_nombre, b.partner,
+            ROUND((b.qty / ${denom})::numeric)::double precision, pr.precio, now()
+     FROM base b LEFT JOIN pr USING (vendedor, producto_ref, partner)
+     WHERE ROUND((b.qty / ${denom})::numeric) > 0
+     ON CONFLICT (period, vendedor, producto_ref, partner) DO NOTHING`,
+    [period, ...closed]
+  );
+
+  // 3. Each product's proyección is the sum of its clients.
+  await query(
+    `INSERT INTO projections (period, vendedor, producto_ref, producto_nombre, proyeccion, is_manual, updated_at)
+     SELECT period, vendedor, producto_ref, MAX(producto_nombre), SUM(proyeccion_cantidad), FALSE, now()
+     FROM client_projections WHERE period = $1
+     GROUP BY period, vendedor, producto_ref
+     ON CONFLICT (period, vendedor, producto_ref) DO UPDATE SET
+       proyeccion = excluded.proyeccion, updated_at = now()
+     WHERE projections.proyeccion IS DISTINCT FROM excluded.proyeccion`,
+    [period]
+  );
+
+  if (opts.rebuild) {
+    // Drop product rows that only existed as a system default and no longer have any client or
+    // sales behind them (e.g. a product missing from the freshly imported report).
+    await query(
+      `DELETE FROM projections p
+       WHERE p.period = $1 AND p.is_manual = FALSE AND p.updated_by IS NULL AND p.observaciones IS NULL
+         AND NOT EXISTS (SELECT 1 FROM client_projections c
+                         WHERE c.period = p.period AND c.vendedor = p.vendedor AND c.producto_ref = p.producto_ref)
+         AND NOT EXISTS (SELECT 1 FROM sales s
+                         WHERE s.vendedor = p.vendedor AND s.producto_ref = p.producto_ref
+                           AND s.period IN (${placeholders(closed.length, 2)}))`,
+      [period, ...closed]
+    );
+  }
+}

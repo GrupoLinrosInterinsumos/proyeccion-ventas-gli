@@ -22,19 +22,21 @@ export async function GET(req: NextRequest) {
       Sede: r.sede,
       Producto: r.producto,
       Cantidad: r.cantidad,
+      Unidad: r.unidad,
       "Detalle de fijado": r.fijado,
     }))
   );
-  detailSheet["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 50 }, { wch: 10 }, { wch: 24 }];
+  detailSheet["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 50 }, { wch: 10 }, { wch: 8 }, { wch: 24 }];
 
   const summarySheet = XLSX.utils.json_to_sheet(
     summary.map((r) => ({
       Producto: r.producto,
       "Total proyectado": r.cantidad_total,
+      Unidad: r.unidad,
       Vendedores: r.vendedores,
     }))
   );
-  summarySheet["!cols"] = [{ wch: 50 }, { wch: 16 }, { wch: 60 }];
+  summarySheet["!cols"] = [{ wch: 50 }, { wch: 16 }, { wch: 8 }, { wch: 60 }];
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, detailSheet, "Proyeccion");

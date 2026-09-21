@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import { getVendorProductTable, getFullCatalogProductTable } from "@/lib/sales";
+import { getVendorProductTable, getFullCatalogProductTable, listCatalogProducts } from "@/lib/sales";
 import { openProjectionPeriod, closedMonthsForPeriod, periodLabel, periodStatus } from "@/lib/period";
 import { REGION_LABELS } from "@/lib/regions";
 import TopNav from "@/components/TopNav";
@@ -23,9 +23,12 @@ export default async function VentasPage({
   const editable = status === "open";
 
   const closed = closedMonthsForPeriod(period);
-  const rows = session.isSpot
-    ? await getFullCatalogProductTable(session.vendedor, period)
-    : await getVendorProductTable(session.vendedor, period);
+  const [rows, catalog] = await Promise.all([
+    session.isSpot
+      ? getFullCatalogProductTable(session.vendedor, period)
+      : getVendorProductTable(session.vendedor, period),
+    editable ? listCatalogProducts() : Promise.resolve([]),
+  ]);
 
   return (
     <div className="min-h-screen bg-surface-container-low">
@@ -67,6 +70,7 @@ export default async function VentasPage({
             defaultOpen
             editable={editable}
             searchable={rows.length > 15}
+            catalog={catalog}
           />
         )}
       </main>

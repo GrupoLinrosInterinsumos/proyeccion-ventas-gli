@@ -54,6 +54,12 @@ export default function ProductBreakdownCard({
                           {p.categoria ?? "Sin categoría"}
                           {p.marca ? ` · ${p.marca}` : ""} · {p.vendedores} vendedor{p.vendedores === 1 ? "" : "es"}
                         </p>
+                        <p
+                          className="truncate text-label-sm text-on-surface-variant"
+                          title={p.vendedor_nombres.join(", ")}
+                        >
+                          {p.vendedor_nombres.join(", ")}
+                        </p>
                       </div>
                     </div>
                     <div className="shrink-0 text-right">

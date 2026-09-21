@@ -2,15 +2,15 @@
 
 import { Fragment, useMemo, useState, useTransition, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
-import { formatQty, formatUsd, initials } from "@/lib/format";
-import type { ProductRow } from "@/lib/sales";
+import { formatQty, formatQtySplit, formatUsd, initials } from "@/lib/format";
+import type { CatalogProduct, ProductRow } from "@/lib/sales";
 import { deleteProductAction } from "@/app/actions";
 import EditableProjectionCells from "./EditableProjectionCells";
 import ClientBreakdown from "./ClientBreakdown";
 import AddProductForm from "./AddProductForm";
 import SortButton, { nextSort, type SortDir } from "./SortButton";
 import UnitTag from "./UnitTag";
-import { unitForCategoria } from "@/lib/units";
+import { addQty, emptyQty, unitForCategoria } from "@/lib/units";
 
 type ProductSortKey = "promedio" | "promedioUsd" | "proyeccion" | "ingreso";
 
@@ -28,6 +28,7 @@ export default function VendorSection({
   defaultOpen = true,
   editable = true,
   searchable = false,
+  catalog = [],
 }: {
   period: string;
   vendedor: string;
@@ -35,6 +36,7 @@ export default function VendorSection({
   defaultOpen?: boolean;
   editable?: boolean;
   searchable?: boolean;
+  catalog?: CatalogProduct[];
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -42,20 +44,29 @@ export default function VendorSection({
   const [categoriaN2, setCategoriaN2] = useState("");
   const [sort, setSort] = useState<{ key: ProductSortKey; dir: SortDir } | null>(null);
 
-  const totals = useMemo(
-    () => ({
-      promedio: rows.reduce((s, r) => s + r.promedio_mensual, 0),
-      proyeccion: rows.reduce((s, r) => s + (r.proyeccion ?? 0), 0),
+  // Kilograms and units are never added together: totals keep them apart.
+  const totals = useMemo(() => {
+    const promedio = emptyQty();
+    const proyeccion = emptyQty();
+    for (const r of rows) {
+      const unit = unitForCategoria(r.categoria_n2);
+      addQty(promedio, unit, r.promedio_mensual);
+      addQty(proyeccion, unit, r.proyeccion ?? 0);
+    }
+    return {
+      promedio,
+      proyeccion,
       ingreso: rows.reduce((s, r) => s + r.ingreso_proyectado, 0),
       pendientes: rows.filter((r) => r.proyeccion === null).length,
-    }),
-    [rows]
-  );
+    };
+  }, [rows]);
 
   const categoriaOptions = useMemo(
     () => [...new Set(rows.map((r) => r.categoria_n2).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b, "es")),
     [rows]
   );
+
+  const filtered = categoriaN2 !== "" || search.trim() !== "";
 
   const visibleRows = useMemo(() => {
     let list = rows;
@@ -100,13 +111,13 @@ export default function VendorSection({
           <div className="text-right">
             <p className="text-label-sm uppercase tracking-wide text-on-surface-variant">Promedio</p>
             <p className="text-body-md font-semibold tabular-nums text-on-surface">
-              {formatQty(totals.promedio)}
+              {formatQtySplit(totals.promedio)}
             </p>
           </div>
           <div className="text-right">
             <p className="text-label-sm uppercase tracking-wide text-on-surface-variant">Proyección</p>
             <p className="text-body-md font-semibold tabular-nums text-primary">
-              {formatQty(totals.proyeccion)}
+              {formatQtySplit(totals.proyeccion)}
             </p>
           </div>
           <div className="text-right">
@@ -128,7 +139,7 @@ export default function VendorSection({
         <div className="border-t border-outline-variant">
           {(editable || searchable || categoriaOptions.length > 1) && (
             <div className="flex flex-wrap items-center gap-2 border-b border-outline-variant bg-surface-container-low px-4 py-2.5">
-              {editable && <AddProductForm vendedor={vendedor} />}
+              {editable && <AddProductForm vendedor={vendedor} catalog={catalog} />}
               {categoriaOptions.length > 1 && (
                 <select
                   value={categoriaN2}
@@ -161,6 +172,12 @@ export default function VendorSection({
                 <tr className="border-b border-outline-variant bg-surface-container-low">
                   <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">
                     Producto
+                    <span
+                      className="ml-2 rounded bg-surface-container-high px-1.5 py-0.5 text-label-sm normal-case tracking-normal text-on-surface-variant"
+                      title={filtered ? "Productos que cumplen el filtro, del total" : "Total de productos"}
+                    >
+                      {filtered ? `${visibleRows.length} de ${rows.length}` : rows.length}
+                    </span>
                   </th>
                   <th className="px-3 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">
                     <SortButton

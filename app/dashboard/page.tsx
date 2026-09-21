@@ -16,7 +16,9 @@ import {
 import { searchVendedores, type UserListRow } from "@/lib/users";
 import { openProjectionPeriod, closedMonthsForPeriod, periodLabel, periodStatus } from "@/lib/period";
 import { isRegion, REGION_LABELS, type Region } from "@/lib/regions";
-import { formatPercent, formatQty, formatUsdCompact } from "@/lib/format";
+import { formatQty, formatQtySplit, formatUsdCompact } from "@/lib/format";
+import { qtyDelta } from "@/lib/units";
+import { ensureOpenPeriodDefaults } from "@/lib/client-projections";
 import TopNav from "@/components/TopNav";
 import DashboardFilters from "@/components/DashboardFilters";
 import VendorSection from "@/components/VendorSection";
@@ -58,6 +60,10 @@ export default async function DashboardPage({
     vendedor: vendedor || undefined,
     categoriaN2: categoriaN2 || undefined,
   };
+  // Totals must include every vendedor's default projection, not only the ones whose page happens
+  // to have been opened — make sure they all exist first.
+  if (periodStatus(period) === "open") await ensureOpenPeriodDefaults(period);
+
   const [kpis, comparison] = await Promise.all([
     getDashboardKpis(period, dashboardFilters),
     getPeriodComparison(period, dashboardFilters),
@@ -132,19 +138,17 @@ export default async function DashboardPage({
             icon={<IconBox />}
             tone="primary"
             label="Promedio mensual (3m)"
-            value={formatQty(kpis.promedioTotal)}
-            hint="unidades"
+            {...qtyCard(kpis.promedioTotal)}
           />
           <KpiCard
             icon={<IconTarget />}
             tone="secondary"
             label="Proyección total del mes"
-            value={formatQty(kpis.proyeccionTotal)}
-            delta={
-              kpis.promedioTotal > 0
-                ? ((kpis.proyeccionTotal - kpis.promedioTotal) / kpis.promedioTotal) * 100
-                : null
-            }
+            {...qtyCard(kpis.proyeccionTotal)}
+            delta={(() => {
+              const d = qtyDelta(kpis.promedioTotal, kpis.proyeccionTotal);
+              return d === null ? null : d * 100;
+            })()}
           />
           <KpiCard
             icon={<IconDollar />}
@@ -155,13 +159,6 @@ export default async function DashboardPage({
           />
           <KpiCard icon={<IconUsers />} tone="tertiary" label="Vendedores" value={String(kpis.vendedores)} />
           <KpiCard icon={<IconGrid />} tone="primary" label="Productos con movimiento" value={String(kpis.productos)} />
-          <KpiCard
-            icon={<IconCheck />}
-            tone="tertiary"
-            label="Cobertura de proyección"
-            value={formatPercent(kpis.paresTotal > 0 ? (kpis.paresConProyeccion / kpis.paresTotal) * 100 : 0)}
-            hint={`${kpis.paresConProyeccion} de ${kpis.paresTotal} productos·vendedor`}
-          />
           <ComparisonKpiCard comparison={comparison} href={comparisonHref} />
         </div>
 
@@ -309,8 +306,8 @@ async function VendorSummarySection({
             </thead>
             <tbody>
               {rows.map((r) => {
-                const delta =
-                  r.promedio_mensual > 0 ? ((r.proyeccion - r.promedio_mensual) / r.promedio_mensual) * 100 : null;
+                const d = qtyDelta(r.promedio_mensual, r.proyeccion);
+                const delta = d === null ? null : d * 100;
                 return (
                   <tr key={r.vendedor} className="border-b border-outline-variant last:border-b-0 hover:bg-surface-container-low">
                     <td className="px-5 py-3 text-body-sm font-medium text-on-surface">
@@ -325,11 +322,11 @@ async function VendorSummarySection({
                       {r.productos}
                     </td>
                     <td className="px-5 py-3 text-right text-body-sm tabular-nums text-on-surface">
-                      {formatQty(r.promedio_mensual)}
+                      {formatQtySplit(r.promedio_mensual)}
                     </td>
                     <td className="px-5 py-3 text-right">
                       <span className="text-body-sm font-medium tabular-nums text-primary">
-                        {formatQty(r.proyeccion)}
+                        {formatQtySplit(r.proyeccion)}
                       </span>
                       {delta !== null && (
                         <span
@@ -390,8 +387,8 @@ async function RegionSummarySection({ period }: { period: string }) {
             </thead>
             <tbody>
               {summary.map((r) => {
-                const delta =
-                  r.promedioTotal > 0 ? ((r.proyeccionTotal - r.promedioTotal) / r.promedioTotal) * 100 : null;
+                const d = qtyDelta(r.promedioTotal, r.proyeccionTotal);
+                const delta = d === null ? null : d * 100;
                 return (
                   <tr key={r.region} className="border-b border-outline-variant last:border-b-0 hover:bg-surface-container-low">
                     <td className="px-5 py-3 text-body-sm font-medium text-on-surface">
@@ -404,11 +401,11 @@ async function RegionSummarySection({ period }: { period: string }) {
                       {r.productos}
                     </td>
                     <td className="px-5 py-3 text-right text-body-sm tabular-nums text-on-surface">
-                      {formatQty(r.promedioTotal)}
+                      {formatQtySplit(r.promedioTotal)}
                     </td>
                     <td className="px-5 py-3 text-right">
                       <span className="text-body-sm font-medium tabular-nums text-primary">
-                        {formatQty(r.proyeccionTotal)}
+                        {formatQtySplit(r.proyeccionTotal)}
                       </span>
                       {delta !== null && (
                         <span
@@ -446,8 +443,11 @@ const TONE_CHIP: Record<"primary" | "secondary" | "tertiary", string> = {
  * breakdown in a new tab. Turns red when actual sales doubled what was projected.
  */
 function ComparisonKpiCard({ comparison, href }: { comparison: PeriodComparison; href: string }) {
-  const delta =
-    comparison.proyectado > 0 ? ((comparison.real - comparison.proyectado) / comparison.proyectado) * 100 : null;
+  const qtyChange = qtyDelta(comparison.proyectado, comparison.real);
+  const usdChange =
+    comparison.proyectadoUsd > 0 ? (comparison.realUsd - comparison.proyectadoUsd) / comparison.proyectadoUsd : null;
+  const muted = comparison.excedido ? "text-on-error-container" : "text-on-surface-variant";
+  const strong = comparison.excedido ? "text-on-error-container" : "text-on-surface";
 
   return (
     <a
@@ -476,25 +476,23 @@ function ComparisonKpiCard({ comparison, href }: { comparison: PeriodComparison;
           Proyectado vs. real · {periodLabel(comparison.previousPeriod)}
         </p>
       </div>
-      <div className="mt-3 flex items-baseline gap-2">
-        <p className={`text-headline-lg ${comparison.excedido ? "text-on-error-container" : "text-on-surface"}`}>
-          {formatQty(comparison.real)}
-        </p>
-        <span className={`text-body-sm ${comparison.excedido ? "text-on-error-container" : "text-on-surface-variant"}`}>
-          / {formatQty(comparison.proyectado)} proyectado
-        </span>
-        {delta !== null && (
-          <span
-            className={`rounded px-1.5 py-0.5 text-label-sm font-medium ${
-              delta >= 0
-                ? "bg-tertiary-fixed text-on-tertiary-fixed-variant"
-                : "bg-secondary-fixed text-on-secondary-fixed-variant"
-            }`}
-          >
-            {delta >= 0 ? "+" : ""}
-            {Math.round(delta)}%
-          </span>
-        )}
+      <div className="mt-3 flex flex-col gap-2">
+        <div>
+          <p className={`text-label-sm uppercase tracking-wide ${muted}`}>Cantidad</p>
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <p className={`text-body-lg font-semibold tabular-nums ${strong}`}>{formatQtySplit(comparison.real)}</p>
+            <span className={`text-body-sm ${muted}`}>/ {formatQtySplit(comparison.proyectado)} proy.</span>
+            <ChangeBadge change={qtyChange} />
+          </div>
+        </div>
+        <div>
+          <p className={`text-label-sm uppercase tracking-wide ${muted}`}>Dólares</p>
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <p className={`text-body-lg font-semibold tabular-nums ${strong}`}>{formatUsdCompact(comparison.realUsd)}</p>
+            <span className={`text-body-sm ${muted}`}>/ {formatUsdCompact(comparison.proyectadoUsd)} proy.</span>
+            <ChangeBadge change={usdChange} />
+          </div>
+        </div>
       </div>
       <p className={`mt-1 text-label-sm ${comparison.excedido ? "text-on-error-container" : "text-on-surface-variant"}`}>
         {comparison.excedido
@@ -503,6 +501,29 @@ function ComparisonKpiCard({ comparison, href }: { comparison: PeriodComparison;
       </p>
     </a>
   );
+}
+
+function ChangeBadge({ change }: { change: number | null }) {
+  if (change === null) return null;
+  return (
+    <span
+      className={`rounded px-1.5 py-0.5 text-label-sm font-medium ${
+        change >= 0
+          ? "bg-tertiary-fixed text-on-tertiary-fixed-variant"
+          : "bg-secondary-fixed text-on-secondary-fixed-variant"
+      }`}
+    >
+      {change >= 0 ? "+" : ""}
+      {Math.round(change * 100)}%
+    </span>
+  );
+}
+
+/** KPI value/hint for a kg + units quantity: kilograms as the headline, units on the side line. */
+function qtyCard(q: { kg: number; und: number }): { value: string; hint?: string } {
+  const hasUnits = Math.round(q.und) !== 0;
+  if (Math.round(q.kg) === 0 && hasUnits) return { value: `${formatQty(q.und)} und` };
+  return { value: `${formatQty(q.kg)} kg`, hint: hasUnits ? `+ ${formatQty(q.und)} und` : undefined };
 }
 
 function KpiCard({
@@ -588,15 +609,6 @@ function IconGrid() {
       <rect x="13.5" y="3.5" width="7" height="7" rx="1.2" />
       <rect x="3.5" y="13.5" width="7" height="7" rx="1.2" />
       <rect x="13.5" y="13.5" width="7" height="7" rx="1.2" />
-    </svg>
-  );
-}
-
-function IconCheck() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-      <circle cx="12" cy="12" r="8.5" />
-      <path d="m8.5 12.5 2.3 2.3 4.7-5.1" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

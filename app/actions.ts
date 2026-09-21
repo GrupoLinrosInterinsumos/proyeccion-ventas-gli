@@ -4,15 +4,20 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { query } from "@/lib/db";
+import { query, queryOne } from "@/lib/db";
 import { createSessionCookie, clearSessionCookie, getSession, findUserByEmail } from "@/lib/auth";
 import { parseSalesWorkbook } from "@/lib/import-excel";
 import { commitImport } from "@/lib/import-commit";
-import { openProjectionPeriod, periodStatus } from "@/lib/period";
+import { openProjectionPeriod, periodStatus, closedMonthsForPeriod } from "@/lib/period";
 import { isRegion } from "@/lib/regions";
 import { generatePassword } from "@/lib/password";
 import { countAdmins } from "@/lib/users";
-import { saveClientProjection, deleteClientProjection, isClientManual } from "@/lib/client-projections";
+import {
+  saveClientProjection,
+  deleteClientProjection,
+  isClientManual,
+  ensureOpenPeriodDefaults,
+} from "@/lib/client-projections";
 
 export type ActionState = { error?: string; success?: string } | null;
 
@@ -93,6 +98,7 @@ export async function saveProjectionAction(formData: FormData): Promise<ActionSt
 
 const addProductSchema = z.object({
   vendedor: z.string().min(1),
+  producto_ref: z.string().optional(),
   producto_nombre: z.string().min(2, "Escribe un nombre de producto."),
   proyeccion: z.string().optional(),
   observaciones: z.string().optional(),
@@ -111,12 +117,39 @@ export async function addProductAction(_prev: ActionState, formData: FormData): 
   }
 
   const period = openProjectionPeriod();
+
+  // A code that exists in the catalog uses the catalog's canonical code and name; any other code
+  // is kept as typed (a product that has never been sold); no code at all gets a generated one.
+  const typedRef = data.producto_ref?.trim() || "";
+  const catalogHit = typedRef
+    ? await queryOne<{ producto_ref: string; producto_nombre: string }>(
+        `SELECT producto_ref, MAX(producto_nombre) AS producto_nombre FROM sales
+         WHERE UPPER(producto_ref) = UPPER($1) GROUP BY producto_ref`,
+        [typedRef]
+      )
+    : undefined;
   const slug = data.producto_nombre
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "");
-  const producto_ref = `MANUAL-${data.vendedor.replace(/\s+/g, "").slice(0, 6).toUpperCase()}-${slug.slice(0, 24)}`;
+  const producto_ref =
+    catalogHit?.producto_ref ??
+    (typedRef ||
+      `MANUAL-${data.vendedor.replace(/\s+/g, "").slice(0, 6).toUpperCase()}-${slug.slice(0, 24)}`);
+  const producto_nombre = catalogHit?.producto_nombre ?? data.producto_nombre.trim();
+
+  const alreadyListed = await queryOne<{ n: number }>(
+    `SELECT (
+       (SELECT COUNT(*) FROM projections WHERE period = $1 AND vendedor = $2 AND producto_ref = $3) +
+       (SELECT COUNT(*) FROM sales WHERE vendedor = $2 AND producto_ref = $3
+          AND period IN (${closedMonthsForPeriod(period).map((_, i) => `$${i + 4}`).join(",")}))
+     )::int AS n`,
+    [period, data.vendedor, producto_ref, ...closedMonthsForPeriod(period)]
+  );
+  if (alreadyListed && alreadyListed.n > 0) {
+    return { error: "Ese producto ya está en tu lista." };
+  }
 
   const proyeccionNum =
     data.proyeccion && data.proyeccion.trim() !== "" ? Number(data.proyeccion) : null;
@@ -136,7 +169,7 @@ export async function addProductAction(_prev: ActionState, formData: FormData): 
       period,
       data.vendedor,
       producto_ref,
-      data.producto_nombre.trim(),
+      producto_nombre,
       proyeccionNum,
       data.observaciones?.trim() || null,
       session.id,
@@ -159,6 +192,9 @@ export async function uploadImportAction(_prev: ActionState, formData: FormData)
     const buffer = Buffer.from(await file.arrayBuffer());
     const parsed = parseSalesWorkbook(buffer);
     await commitImport(parsed, file.name, session.id);
+    // Re-derive the untouched default projections of the open period from the freshly imported
+    // sales, for every vendedor. Anything edited or pinned by a vendedor is left alone.
+    await ensureOpenPeriodDefaults(openProjectionPeriod(), { rebuild: true });
     revalidatePath("/ventas");
     revalidatePath("/dashboard");
     revalidatePath("/importar");

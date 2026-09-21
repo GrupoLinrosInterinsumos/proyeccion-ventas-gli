@@ -1,12 +1,14 @@
 import { query } from "./db";
 import { listUsers } from "./users";
 import { getVendorProductTable, getFullCatalogProductTable } from "./sales";
+import { unitForCategoria, type Unit } from "./units";
 
 export type ProjectionExportRow = {
   vendedor: string;
   sede: string;
   producto: string;
   cantidad: number;
+  unidad: Unit;
   fijado: string;
 };
 
@@ -43,6 +45,7 @@ export async function getProjectionExportRows(period: string): Promise<Projectio
             sede: u.region ?? "",
             producto: row.producto_nombre,
             cantidad: row.proyeccion as number,
+            unidad: unitForCategoria(row.categoria_n2),
             fijado: fijado ? `Fijado hasta ${fijado}` : "No fijado",
           };
         });
@@ -56,15 +59,16 @@ export async function getProjectionExportRows(period: string): Promise<Projectio
 
 export type ProjectionExportProductSummaryRow = {
   producto: string;
+  unidad: Unit;
   cantidad_total: number;
   vendedores: string;
 };
 
 /** Groups export rows by producto — total proyectado and which vendedores contribute to it. */
 export function summarizeExportByProduct(rows: ProjectionExportRow[]): ProjectionExportProductSummaryRow[] {
-  const byProduct = new Map<string, { cantidad_total: number; vendedores: Set<string> }>();
+  const byProduct = new Map<string, { unidad: Unit; cantidad_total: number; vendedores: Set<string> }>();
   for (const r of rows) {
-    const entry = byProduct.get(r.producto) ?? { cantidad_total: 0, vendedores: new Set<string>() };
+    const entry = byProduct.get(r.producto) ?? { unidad: r.unidad, cantidad_total: 0, vendedores: new Set<string>() };
     entry.cantidad_total += r.cantidad;
     entry.vendedores.add(r.vendedor);
     byProduct.set(r.producto, entry);
@@ -72,6 +76,7 @@ export function summarizeExportByProduct(rows: ProjectionExportRow[]): Projectio
   return [...byProduct.entries()]
     .map(([producto, v]) => ({
       producto,
+      unidad: v.unidad,
       cantidad_total: v.cantidad_total,
       vendedores: [...v.vendedores].sort((a, b) => a.localeCompare(b, "es")).join(", "),
     }))
