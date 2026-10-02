@@ -79,3 +79,11 @@ recursos.
   `vendedor` coincide con su propia cuenta (validado en `app/actions.ts`).
 - **Sesión**: cookie firmada (JWT/HS256) de 30 días; define `SESSION_SECRET` en producción (Render
   lo genera solo si usas el Blueprint).
+
+## Exportación para el reporte de cobertura de stock
+
+`GET /api/export-cobertura?period=AAAA-MM` devuelve un Excel (hoja "Por codigo") con la proyección del periodo
+por código de producto: total, lo proyectado a empresas del grupo (partner LINROS S.R.L. / INTERINSUMOS S.R.L.),
+el total sin grupo y si el periodo está Abierto/Cerrado. Acceso: sesión de administrador o
+`Authorization: Bearer <EXPORT_TOKEN>` (variable de entorno en Render). La usa el robot del reporte semanal de
+cobertura de stock (`Agente-correos`), que toma la proyección de los meses cerrados.
