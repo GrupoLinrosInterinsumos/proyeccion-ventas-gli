@@ -1,4 +1,4 @@
-import { withTransaction } from "./db";
+import { withTransaction, BACKFILL_CATEGORIA_N2_SQL } from "./db";
 import type { AggregatedSaleRow, ParseResult } from "./import-excel";
 
 const SALES_COLUMNS = [
@@ -65,6 +65,8 @@ export async function commitImport(
         values
       );
     }
+
+    await q(BACKFILL_CATEGORIA_N2_SQL);
 
     await q(`INSERT INTO imports (filename, periods_json, row_count, uploaded_by) VALUES ($1,$2,$3,$4)`, [
       filename,

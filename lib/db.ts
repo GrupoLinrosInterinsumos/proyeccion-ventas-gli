@@ -9,6 +9,20 @@ type Client = {
   }>;
 };
 
+/**
+ * categoria_n2 is a property of the product, but older imports left it blank on rows (the
+ * reports loaded before that column was read). Fills each blank row from the same product's
+ * other rows — conservative: never overwrites a value, and a product with no category anywhere
+ * stays blank. Everything that depends on the category (kg vs. und, the category filters)
+ * would otherwise give different answers for the same product depending on the month.
+ */
+export const BACKFILL_CATEGORIA_N2_SQL = `
+UPDATE sales s SET categoria_n2 = c.cat
+FROM (SELECT producto_ref, MAX(NULLIF(TRIM(categoria_n2), '')) AS cat FROM sales GROUP BY producto_ref) c
+WHERE s.producto_ref = c.producto_ref AND c.cat IS NOT NULL
+  AND (s.categoria_n2 IS NULL OR TRIM(s.categoria_n2) = '');
+`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
@@ -88,6 +102,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS is_spot BOOLEAN NOT NULL DEFAULT FALS
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS categoria_n2 TEXT;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS precio_unitario DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE projections ADD COLUMN IF NOT EXISTS fijado_hasta DATE;
+${BACKFILL_CATEGORIA_N2_SQL}
 `;
 
 async function createClient(): Promise<Client> {
