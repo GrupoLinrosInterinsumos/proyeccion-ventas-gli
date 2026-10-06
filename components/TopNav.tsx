@@ -5,7 +5,17 @@ import type { SessionUser } from "@/lib/auth";
 import { REGION_LABELS } from "@/lib/regions";
 import GliLogo from "./GliLogo";
 
-export default function TopNav({ session, active }: { session: SessionUser; active: string }) {
+export default function TopNav({
+  session,
+  active,
+  period,
+}: {
+  session: SessionUser;
+  active: string;
+  /** The period being viewed, carried across the period-aware tabs so switching tabs keeps it. */
+  period?: string;
+}) {
+  const withPeriod = (href: string) => (period ? `${href}?period=${encodeURIComponent(period)}` : href);
   const links: { href: string; label: string }[] = [];
   if (session.vendedor) links.push({ href: "/ventas", label: "Mi proyección" });
   links.push({ href: "/dashboard", label: "Dashboard" });
@@ -13,7 +23,7 @@ export default function TopNav({ session, active }: { session: SessionUser; acti
     links.push({ href: "/importar", label: "Importar data" });
     links.push({ href: "/usuarios", label: "Usuarios" });
   }
-  const homeHref = session.vendedor ? "/ventas" : "/dashboard";
+  const homeHref = withPeriod(session.vendedor ? "/ventas" : "/dashboard");
 
   return (
     <header className="relative overflow-hidden bg-primary shadow-md">
@@ -37,7 +47,7 @@ export default function TopNav({ session, active }: { session: SessionUser; acti
             {links.map((l) => (
               <Link
                 key={l.href}
-                href={l.href}
+                href={l.href === "/ventas" || l.href === "/dashboard" ? withPeriod(l.href) : l.href}
                 className={`rounded-md px-3 py-2 text-body-sm font-medium transition-colors ${
                   active === l.href
                     ? "bg-primary-fixed text-on-primary-fixed-variant"

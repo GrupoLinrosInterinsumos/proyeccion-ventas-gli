@@ -76,7 +76,7 @@ export default async function DashboardPage({
 
   return (
     <div className="min-h-screen bg-surface-container-low">
-      <TopNav session={session} active="/dashboard" />
+      <TopNav session={session} active="/dashboard" period={period} />
       <main className="mx-auto max-w-container px-margin-mobile py-8 md:px-margin-desktop">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -94,6 +94,9 @@ export default async function DashboardPage({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Link href="/" className="text-body-sm text-primary hover:underline">
+              Ver otros periodos
+            </Link>
             {isAdmin ? (
               <DashboardFilters
                 region={region}

@@ -32,7 +32,7 @@ export default async function VentasPage({
 
   return (
     <div className="min-h-screen bg-surface-container-low">
-      <TopNav session={session} active="/ventas" />
+      <TopNav session={session} active="/ventas" period={period} />
       <main className="mx-auto max-w-container px-margin-mobile py-8 md:px-margin-desktop">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>

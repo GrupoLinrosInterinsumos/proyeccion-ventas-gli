@@ -76,7 +76,7 @@ export default async function ComparacionPage({
 
   return (
     <div className="min-h-screen bg-surface-container-low">
-      <TopNav session={session} active="/dashboard" />
+      <TopNav session={session} active="/dashboard" period={contextPeriod} />
       <main className="mx-auto max-w-container px-margin-mobile py-8 md:px-margin-desktop">
         <p className="text-label-md uppercase tracking-wide text-on-surface-variant">
           Proyectado vs. real
