@@ -17,7 +17,7 @@ import { closedMonthsForPeriod } from "@/lib/period";
 
 // Months shown in the peak-sales chart — keep in sync with SERIES_MONTHS in lib/sales.ts (that
 // module is server-only, so it can't be imported here).
-const CHART_MONTHS = 12;
+const CHART_MONTHS = 3;
 
 type ProductSortKey = "promedio" | "proyeccion" | "ingreso";
 
@@ -215,9 +215,9 @@ export default function VendorSection({
                   </th>
                   <th
                     className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant"
-                    title="Ventas de los últimos 12 meses. Barras oscuras: los 3 meses del promedio. Barra roja: mes pico."
+                    title="Ventas de cada uno de los 3 meses del promedio. Barra roja: el mes pico."
                   >
-                    Ventas 12m
+                    Ventas 3m
                   </th>
                   <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">
                     <div className="flex items-center gap-3">

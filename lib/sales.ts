@@ -41,12 +41,12 @@ export type ProductRow = {
   /** Someone saved a value for this product (a client's quantity/price, a pin, or a note) — as
    * opposed to the system-generated default. Drives the green "modified" indicator. */
   editado: boolean;
-  /** Quantity sold per month over the 12 months ending at the last closed month (oldest first,
+  /** Quantity sold per month over the 3 closed months ending at the last closed month (oldest first,
    * aligned with `closedMonthsForPeriod(period, SERIES_MONTHS)`) — for the peak-sales chart. */
   serie: number[];
 };
 
-export const SERIES_MONTHS = 12;
+export const SERIES_MONTHS = 3;
 
 /** Per producto_ref: monthly quantity sold by this vendedor over the chart window. */
 async function monthlySeriesByProduct(period: string, vendedor: string): Promise<Map<string, number[]>> {
