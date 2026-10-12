@@ -87,3 +87,11 @@ por código de producto: total, lo proyectado a empresas del grupo (partner LINR
 el total sin grupo y si el periodo está Abierto/Cerrado. Acceso: sesión de administrador o
 `Authorization: Bearer <EXPORT_TOKEN>` (variable de entorno en Render). La usa el robot del reporte semanal de
 cobertura de stock (`Agente-correos`), que toma la proyección de los meses cerrados.
+
+### Correcciones de proyección (página Correcciones, solo administradores)
+
+Cuando se cae una venta (o entra una nueva) en un mes ya cerrado, un administrador la registra en **Correcciones**:
+producto, tipo (ajuste +/− o nueva cantidad del mes) y motivo. No se modifica `client_projections`: la tabla
+`projection_corrections` guarda cada corrección con autor y fecha, y el export de cobertura las aplica encima
+("Proyeccion sin grupo" ya corregida, más "Proyeccion sin grupo original" y "Correccion" con el detalle). Una corrección
+se puede anular (queda en el historial). Solo se aceptan meses cerrados; el mes abierto lo editan los vendedores.

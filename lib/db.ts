@@ -96,6 +96,23 @@ CREATE TABLE IF NOT EXISTS client_projections (
 );
 CREATE INDEX IF NOT EXISTS idx_client_projections_lookup ON client_projections (vendedor, producto_ref, period);
 
+-- Admin corrections to an already-closed month (e.g. a projected sale fell through). Never edits
+-- client_projections: the export applies them on top, so the vendors' original projection stays intact.
+CREATE TABLE IF NOT EXISTS projection_corrections (
+  id SERIAL PRIMARY KEY,
+  period TEXT NOT NULL,
+  producto_ref TEXT NOT NULL,
+  producto_nombre TEXT NOT NULL,
+  tipo TEXT NOT NULL CHECK (tipo IN ('total','ajuste')),
+  cantidad DOUBLE PRECISION NOT NULL,
+  motivo TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  anulada_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  anulada_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_projection_corrections_period ON projection_corrections (period);
+
 -- Idempotent migrations for tables that already existed before these columns were added.
 ALTER TABLE users ALTER COLUMN vendedor DROP NOT NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_spot BOOLEAN NOT NULL DEFAULT FALSE;

@@ -509,3 +509,62 @@ export async function deleteProductAction(formData: FormData): Promise<ActionSta
   revalidatePath("/dashboard");
   return { success: "Producto eliminado." };
 }
+
+// ---------- Correcciones de administrador a un mes ya cerrado (se cayó una venta, etc.)
+
+const correctionSchema = z.object({
+  period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Periodo inválido."),
+  producto: z.string().trim().min(1, "Elige un producto."),
+  tipo: z.enum(["total", "ajuste"]),
+  cantidad: z.string().trim().min(1, "Escribe la cantidad."),
+  motivo: z.string().trim().min(3, "Escribe el motivo."),
+});
+
+export async function createCorrectionAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session || !session.isAdmin) return { error: "No autorizado." };
+
+  const parsed = correctionSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Datos inválidos." };
+  const data = parsed.data;
+  if (periodStatus(data.period) !== "closed") {
+    return { error: "Solo se corrigen meses cerrados; el mes abierto lo editan los vendedores." };
+  }
+  const cantidad = Number(data.cantidad.replace(/,/g, ""));
+  if (!Number.isFinite(cantidad)) return { error: "Cantidad inválida." };
+  if (data.tipo === "total" && cantidad < 0) return { error: "La proyección corregida no puede ser negativa." };
+  if (data.tipo === "ajuste" && cantidad === 0) return { error: "El ajuste no puede ser 0." };
+
+  // El selector muestra "CODIGO · Nombre"; se acepta también el código solo.
+  const ref = data.producto.split(" · ")[0].trim().toUpperCase();
+  const producto = await queryOne<{ producto_nombre: string }>(
+    `SELECT producto_nombre FROM (
+       SELECT MAX(producto_nombre) AS producto_nombre FROM sales WHERE producto_ref = $1
+       UNION ALL
+       SELECT MAX(producto_nombre) FROM client_projections WHERE producto_ref = $1
+     ) t WHERE producto_nombre IS NOT NULL LIMIT 1`,
+    [ref]
+  );
+  if (!producto) return { error: `No se encontró el código ${ref}.` };
+
+  await query(
+    `INSERT INTO projection_corrections (period, producto_ref, producto_nombre, tipo, cantidad, motivo, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [data.period, ref, producto.producto_nombre, data.tipo, cantidad, data.motivo, session.id]
+  );
+  revalidatePath("/correcciones");
+  return { success: `Corrección registrada para ${producto.producto_nombre}. El próximo reporte de cobertura ya la usa.` };
+}
+
+export async function voidCorrectionAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session || !session.isAdmin) return { error: "No autorizado." };
+  const id = Number(formData.get("id"));
+  if (!id) return { error: "Corrección inválida." };
+  await query(
+    `UPDATE projection_corrections SET anulada_by = $1, anulada_at = now() WHERE id = $2 AND anulada_at IS NULL`,
+    [session.id, id]
+  );
+  revalidatePath("/correcciones");
+  return { success: "Corrección anulada." };
+}

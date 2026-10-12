@@ -21,6 +21,7 @@ export default function TopNav({
   links.push({ href: "/dashboard", label: "Dashboard" });
   if (session.isAdmin) {
     links.push({ href: "/importar", label: "Importar data" });
+    links.push({ href: "/correcciones", label: "Correcciones" });
     links.push({ href: "/usuarios", label: "Usuarios" });
   }
   const homeHref = withPeriod(session.vendedor ? "/ventas" : "/dashboard");
