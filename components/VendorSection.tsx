@@ -10,13 +10,19 @@ import ClientBreakdown from "./ClientBreakdown";
 import AddProductForm from "./AddProductForm";
 import SortButton, { nextSort, type SortDir } from "./SortButton";
 import UnitTag from "./UnitTag";
+import MonthlySparkline from "./MonthlySparkline";
+import SaveAllButton from "./SaveAllButton";
 import { addQty, emptyQty, unitForCategoria } from "@/lib/units";
+import { closedMonthsForPeriod } from "@/lib/period";
 
-type ProductSortKey = "promedio" | "promedioUsd" | "proyeccion" | "ingreso";
+// Months shown in the peak-sales chart — keep in sync with SERIES_MONTHS in lib/sales.ts (that
+// module is server-only, so it can't be imported here).
+const CHART_MONTHS = 12;
+
+type ProductSortKey = "promedio" | "proyeccion" | "ingreso";
 
 const SORT_VALUE: Record<ProductSortKey, (r: ProductRow) => number> = {
   promedio: (r) => r.promedio_mensual,
-  promedioUsd: (r) => r.promedio_usd,
   proyeccion: (r) => r.proyeccion ?? -1,
   ingreso: (r) => r.ingreso_proyectado,
 };
@@ -60,6 +66,8 @@ export default function VendorSection({
       pendientes: rows.filter((r) => r.proyeccion === null).length,
     };
   }, [rows]);
+
+  const chartMonths = useMemo(() => closedMonthsForPeriod(period, CHART_MONTHS), [period]);
 
   const categoriaOptions = useMemo(
     () => [...new Set(rows.map((r) => r.categoria_n2).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b, "es")),
@@ -140,34 +148,52 @@ export default function VendorSection({
           {(editable || searchable || categoriaOptions.length > 1) && (
             <div className="flex flex-wrap items-center gap-2 border-b border-outline-variant bg-surface-container-low px-4 py-2.5">
               {editable && <AddProductForm vendedor={vendedor} catalog={catalog} />}
-              {categoriaOptions.length > 1 && (
-                <select
-                  value={categoriaN2}
-                  onChange={(e) => setCategoriaN2(e.target.value)}
-                  className="ml-auto rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-                >
-                  <option value="">Todas las categorías</option>
-                  {categoriaOptions.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {searchable && (
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Buscar producto…"
-                  className={`w-56 rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 ${
-                    categoriaOptions.length > 1 ? "" : "ml-auto"
-                  }`}
-                />
-              )}
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                {editable && (
+                  <span
+                    className="flex items-center gap-1.5 text-label-sm text-on-surface-variant"
+                    title="Filas que ya modificaste (valor cambiado, fijado o con observación)"
+                  >
+                    <span className="inline-block h-3 w-3 rounded-sm border border-[#b9dfc1] bg-edited" aria-hidden />
+                    Ya modificado
+                  </span>
+                )}
+                {categoriaOptions.length > 1 && (
+                  <select
+                    value={categoriaN2}
+                    onChange={(e) => setCategoriaN2(e.target.value)}
+                    className="rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  >
+                    <option value="">Todas las categorías</option>
+                    {categoriaOptions.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {searchable && (
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Buscar producto…"
+                    className="w-56 rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  />
+                )}
+                {editable && <SaveAllButton />}
+              </div>
             </div>
           )}
           <div className="thin-scroll overflow-x-auto">
-            <table className="w-full border-collapse">
+            <table className="w-full min-w-[760px] table-fixed border-collapse">
+              <colgroup>
+                <col />
+                <col className="w-[120px]" />
+                <col className="w-[104px]" />
+                <col className="w-[172px]" />
+                <col className="w-[190px]" />
+                <col className="w-[28px]" />
+              </colgroup>
               <thead>
                 <tr className="border-b border-outline-variant bg-surface-container-low">
                   <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">
@@ -187,13 +213,11 @@ export default function VendorSection({
                       onClick={() => setSort((s) => nextSort(s, "promedio"))}
                     />
                   </th>
-                  <th className="px-3 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">
-                    <SortButton
-                      label="Prom. US$ (3m)"
-                      active={sort?.key === "promedioUsd"}
-                      dir={sort?.dir ?? "desc"}
-                      onClick={() => setSort((s) => nextSort(s, "promedioUsd"))}
-                    />
+                  <th
+                    className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant"
+                    title="Ventas de los últimos 12 meses. Barras oscuras: los 3 meses del promedio. Barra roja: mes pico."
+                  >
+                    Ventas 12m
                   </th>
                   <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">
                     <div className="flex items-center gap-3">
@@ -223,7 +247,11 @@ export default function VendorSection({
                   const isOpen = expanded === key;
                   return (
                     <Fragment key={key}>
-                      <tr className="cursor-pointer border-b border-outline-variant last:border-b-0 hover:bg-surface-container-low">
+                      <tr
+                        className={`cursor-pointer border-b border-outline-variant last:border-b-0 ${
+                          row.editado ? "bg-edited hover:bg-edited-hover" : "hover:bg-surface-container-low"
+                        }`}
+                      >
                         <td className="px-3 py-2" onClick={() => setExpanded(isOpen ? null : key)}>
                           <div className="flex items-start gap-2">
                             <span
@@ -232,8 +260,8 @@ export default function VendorSection({
                             >
                               ›
                             </span>
-                            <div>
-                              <p className="text-body-sm font-medium text-on-surface">
+                            <div className="min-w-0">
+                              <p className="break-words text-body-sm font-medium text-on-surface">
                                 {row.producto_nombre}
                               </p>
                               <p className="text-label-sm text-on-surface-variant">
@@ -261,11 +289,12 @@ export default function VendorSection({
                           {formatQty(row.promedio_mensual)}
                           <UnitTag unit={unitForCategoria(row.categoria_n2)} />
                         </td>
-                        <td
-                          className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface-variant"
-                          onClick={() => setExpanded(isOpen ? null : key)}
-                        >
-                          {row.promedio_usd > 0 ? formatUsd(row.promedio_usd) : "—"}
+                        <td className="px-3 py-2" onClick={() => setExpanded(isOpen ? null : key)}>
+                          <MonthlySparkline
+                            values={row.serie}
+                            months={chartMonths}
+                            unit={unitForCategoria(row.categoria_n2)}
+                          />
                         </td>
                         {editable ? (
                           <EditableProjectionCells
@@ -311,7 +340,7 @@ export default function VendorSection({
                                 </p>
                               )}
                             </td>
-                            <td className="px-3 py-2 text-body-sm text-on-surface-variant">
+                            <td className="break-words px-3 py-2 text-body-sm text-on-surface-variant">
                               {row.observaciones || "—"}
                             </td>
                             <td className="w-8 px-2 py-2" />

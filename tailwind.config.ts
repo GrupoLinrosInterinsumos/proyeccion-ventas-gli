@@ -53,6 +53,9 @@ const config: Config = {
         "on-background": "#191c1e",
         "surface-variant": "#e1e2e5",
         "surface-lowest": "#ffffff",
+        // "Already modified" rows: light green so a person-edited row stands out from defaults.
+        edited: "#e7f5ea",
+        "edited-hover": "#d9eedd",
       },
       fontFamily: {
         sans: [

@@ -34,13 +34,52 @@ export type ProductRow = {
   categoria_n2: string | null;
   cantidad_total: number;
   promedio_mensual: number;
-  /** 3-month average revenue (USD) — read-only, from the imported sales. */
-  promedio_usd: number;
   proyeccion: number | null;
   ingreso_proyectado: number;
   observaciones: string | null;
   is_manual: boolean;
+  /** Someone saved a value for this product (a client's quantity/price, a pin, or a note) — as
+   * opposed to the system-generated default. Drives the green "modified" indicator. */
+  editado: boolean;
+  /** Quantity sold per month over the 12 months ending at the last closed month (oldest first,
+   * aligned with `closedMonthsForPeriod(period, SERIES_MONTHS)`) — for the peak-sales chart. */
+  serie: number[];
 };
+
+export const SERIES_MONTHS = 12;
+
+/** Per producto_ref: monthly quantity sold by this vendedor over the chart window. */
+async function monthlySeriesByProduct(period: string, vendedor: string): Promise<Map<string, number[]>> {
+  const months = closedMonthsForPeriod(period, SERIES_MONTHS);
+  const rows = await query<{ producto_ref: string; period: string; qty: number }>(
+    `SELECT producto_ref, period, SUM(cantidad) AS qty
+     FROM sales
+     WHERE vendedor = $1 AND period IN (${placeholders(months.length, 2)})
+     GROUP BY producto_ref, period`,
+    [vendedor, ...months]
+  );
+  const index = new Map(months.map((m, i) => [m, i]));
+  const result = new Map<string, number[]>();
+  for (const r of rows) {
+    const series = result.get(r.producto_ref) ?? new Array<number>(months.length).fill(0);
+    series[index.get(r.period) ?? 0] = Number(r.qty);
+    result.set(r.producto_ref, series);
+  }
+  return result;
+}
+
+/** Products where a person (not the system default) has saved something for this period. */
+async function editedProductRefs(period: string, vendedor: string): Promise<Set<string>> {
+  const rows = await query<{ producto_ref: string }>(
+    `SELECT producto_ref FROM client_projections
+       WHERE period = $1 AND vendedor = $2 AND (updated_by IS NOT NULL OR fijado_hasta IS NOT NULL)
+     UNION
+     SELECT producto_ref FROM projections
+       WHERE period = $1 AND vendedor = $2 AND (is_manual OR NULLIF(TRIM(observaciones), '') IS NOT NULL)`,
+    [period, vendedor]
+  );
+  return new Set(rows.map((r) => r.producto_ref));
+}
 
 /** Per producto_ref: sum of proyección × precio across its clients (USD), for one vendedor+period. */
 async function revenueByProduct(period: string, vendedor: string): Promise<Map<string, number>> {
@@ -79,11 +118,9 @@ export async function getVendorProductTable(
     producto_nombre: string;
     categoria_n2: string | null;
     total: number;
-    ingreso: number;
   }>(
     `SELECT producto_ref, MAX(producto_nombre) as producto_nombre,
-            MAX(NULLIF(categoria_n2, '')) as categoria_n2, SUM(cantidad) as total,
-            SUM(ingreso_soles) as ingreso
+            MAX(NULLIF(categoria_n2, '')) as categoria_n2, SUM(cantidad) as total
      FROM sales
      WHERE vendedor = $1 AND period IN (${placeholders(closed.length, 2)})
      GROUP BY producto_ref`,
@@ -104,6 +141,10 @@ export async function getVendorProductTable(
   if (periodStatus(projectionPeriod) === "open") await refreshUntouchedPrices(projectionPeriod, vendedor);
   const revenueByRef = await revenueByProduct(projectionPeriod, vendedor);
   const clientQtyByRef = await clientQtySumByProduct(projectionPeriod, vendedor);
+  const [serieByRef, editedRefs] = await Promise.all([
+    monthlySeriesByProduct(projectionPeriod, vendedor),
+    editedProductRefs(projectionPeriod, vendedor),
+  ]);
 
   const projByRef = new Map(projRows.map((p) => [p.producto_ref, p]));
   const rows: ProductRow[] = [];
@@ -125,11 +166,12 @@ export async function getVendorProductTable(
       categoria_n2: row.categoria_n2,
       cantidad_total: Number(row.total),
       promedio_mensual: Number(row.total) / denom,
-      promedio_usd: Number(row.ingreso) / denom,
       proyeccion: clientSum !== undefined ? clientSum : storedProyeccion,
       ingreso_proyectado: revenueByRef.get(row.producto_ref) ?? 0,
       observaciones: proj?.observaciones ?? null,
       is_manual: false,
+      editado: editedRefs.has(row.producto_ref),
+      serie: serieByRef.get(row.producto_ref) ?? [],
     });
   }
 
@@ -159,11 +201,12 @@ export async function getVendorProductTable(
       categoria_n2: manualCategoria.get(proj.producto_ref) ?? null,
       cantidad_total: 0,
       promedio_mensual: 0,
-      promedio_usd: 0,
       proyeccion: clientSum !== undefined ? clientSum : storedProyeccion,
       ingreso_proyectado: revenueByRef.get(proj.producto_ref) ?? 0,
       observaciones: proj.observaciones,
       is_manual: true,
+      editado: true,
+      serie: serieByRef.get(proj.producto_ref) ?? [],
     });
   }
 
@@ -254,6 +297,7 @@ export async function getFullCatalogProductTable(vendedor: string, projectionPer
   const projByRef = new Map(projRows.map((p) => [p.producto_ref, p]));
   const revenueByRef = await revenueByProduct(projectionPeriod, vendedor);
   const clientQtyByRef = await clientQtySumByProduct(projectionPeriod, vendedor);
+  const editedRefs = await editedProductRefs(projectionPeriod, vendedor);
   const corrections: { producto_ref: string; producto_nombre: string; proyeccion: number }[] = [];
 
   const rows: ProductRow[] = catalogRows.map((c) => {
@@ -269,11 +313,12 @@ export async function getFullCatalogProductTable(vendedor: string, projectionPer
       categoria_n2: c.categoria_n2,
       cantidad_total: 0,
       promedio_mensual: 0,
-      promedio_usd: 0,
       proyeccion: clientSum !== undefined ? clientSum : storedProyeccion,
       ingreso_proyectado: revenueByRef.get(c.producto_ref) ?? 0,
       observaciones: proj?.observaciones ?? null,
       is_manual: false,
+      editado: editedRefs.has(c.producto_ref),
+      serie: [],
     };
   });
 

@@ -1,18 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { formatQty, formatUsd } from "@/lib/format";
 import { saveClientProjectionAction, deleteClientProjectionAction } from "@/app/actions";
+import { registerFlush, trackSave } from "@/lib/save-tracker";
 import SortButton, { nextSort, type SortDir } from "./SortButton";
 import UnitTag from "./UnitTag";
 import type { Unit } from "@/lib/units";
 
-type ClientSortKey = "promedio" | "promedioUsd" | "proyeccion" | "total";
+type ClientSortKey = "promedio" | "proyeccion" | "total";
 
 const SORT_VALUE: Record<ClientSortKey, (r: Row) => number> = {
   promedio: (r) => r.promedio_mensual,
-  promedioUsd: (r) => r.promedio_usd,
   proyeccion: (r) => r.proyeccion ?? -1,
   total: (r) => r.total,
 };
@@ -20,13 +20,13 @@ const SORT_VALUE: Record<ClientSortKey, (r: Row) => number> = {
 type Row = {
   partner: string;
   promedio_mensual: number;
-  promedio_usd: number;
   proyeccion: number | null;
   precio: number | null;
   total: number;
   fijado_hasta: string | null;
   alert_acknowledged: boolean;
   is_manual: boolean;
+  editado: boolean;
 };
 
 export default function ClientBreakdown({
@@ -79,11 +79,10 @@ export default function ClientBreakdown({
     return rows.reduce(
       (acc, r) => ({
         promedio: acc.promedio + r.promedio_mensual,
-        promedioUsd: acc.promedioUsd + r.promedio_usd,
         proyeccion: acc.proyeccion + (r.proyeccion ?? 0),
         total: acc.total + r.total,
       }),
-      { promedio: 0, promedioUsd: 0, proyeccion: 0, total: 0 }
+      { promedio: 0, proyeccion: 0, total: 0 }
     );
   }, [rows]);
 
@@ -118,7 +117,15 @@ export default function ClientBreakdown({
           {rows.length === 0 && !addingClient ? (
             <p className="px-3 py-2 text-body-sm text-on-surface-variant">Sin ventas registradas en el periodo.</p>
           ) : (
-            <table className="w-full border-collapse">
+            <table className="w-full table-fixed border-collapse">
+              <colgroup>
+                <col />
+                <col className="w-[104px]" />
+                <col className="w-[172px]" />
+                <col className="w-[96px]" />
+                <col className="w-[104px]" />
+                <col className="w-[148px]" />
+              </colgroup>
               <thead>
                 <tr className="border-b border-outline-variant bg-surface-container-low">
                   <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">
@@ -130,14 +137,6 @@ export default function ClientBreakdown({
                       active={sort?.key === "promedio"}
                       dir={sort?.dir ?? "desc"}
                       onClick={() => setSort((s) => nextSort(s, "promedio"))}
-                    />
-                  </th>
-                  <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">
-                    <SortButton
-                      label="Prom. US$"
-                      active={sort?.key === "promedioUsd"}
-                      dir={sort?.dir ?? "desc"}
-                      onClick={() => setSort((s) => nextSort(s, "promedioUsd"))}
                     />
                   </th>
                   <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">
@@ -186,9 +185,6 @@ export default function ClientBreakdown({
                     <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface-variant">
                       {formatQty(totals.promedio)}
                       <UnitTag unit={unit} />
-                    </td>
-                    <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface-variant">
-                      {formatUsd(totals.promedioUsd)}
                     </td>
                     <td className="px-3 py-2 text-body-sm tabular-nums text-on-surface">
                       {formatQty(totals.proyeccion)}
@@ -251,6 +247,13 @@ function ClientRow({
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [edited, setEdited] = useState(row.editado);
+  // What the server currently has, to tell a real edit from just tabbing through a field.
+  const lastSaved = useRef({
+    proyeccion: row.proyeccion?.toString() ?? "",
+    precio: row.precio !== null ? row.precio.toFixed(2) : "",
+    fijado: row.fijado_hasta ?? "",
+  });
 
   const proyeccionNum = proyeccion.trim() === "" ? null : Number(proyeccion);
   const precioNum = precio.trim() === "" ? null : Number(precio);
@@ -276,14 +279,34 @@ function ClientRow({
 
     setStatus("saving");
     startTransition(async () => {
-      const res = await saveClientProjectionAction(fd);
+      const res = await trackSave(saveClientProjectionAction(fd));
       setStatus(res?.error ? "error" : "saved");
       if (!res?.error) {
+        lastSaved.current = {
+          proyeccion: next.proyeccion ?? proyeccion,
+          precio: next.precio ?? precio,
+          fijado: fh ?? "",
+        };
+        setEdited(true);
         onSaved();
         setTimeout(() => setStatus("idle"), 1200);
       }
     });
   }
+
+  // Normalizes the typed values and saves them only if something actually changed.
+  function flush() {
+    const p = proyeccion.trim() === "" ? "" : String(Math.round(Number(proyeccion)));
+    const pr = precio.trim() === "" ? "" : (Math.round(Number(precio) * 100) / 100).toFixed(2);
+    const saved = lastSaved.current;
+    if (p === saved.proyeccion && pr === saved.precio && fijadoHasta === saved.fijado) return;
+    setProyeccion(p);
+    setPrecio(pr);
+    persist({ proyeccion: p, precio: pr, fijado_hasta: fijadoHasta || null });
+  }
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(() => (editable ? registerFlush(() => flushRef.current()) : undefined), [editable]);
 
   function deleteClient() {
     if (!confirm(`¿Eliminar a ${row.partner} de este producto?`)) return;
@@ -303,8 +326,8 @@ function ClientRow({
 
   return (
     <>
-      <tr className="border-b border-outline-variant last:border-b-0">
-        <td className="px-3 py-1.5 text-body-sm text-on-surface">
+      <tr className={`border-b border-outline-variant last:border-b-0 ${edited ? "bg-edited" : ""}`}>
+        <td className="break-words px-3 py-1.5 text-body-sm text-on-surface">
           {row.partner}
           {row.is_manual && (
             <span className="ml-1.5 rounded bg-tertiary-fixed px-1 py-0.5 text-label-sm text-on-tertiary-fixed-variant">
@@ -331,9 +354,6 @@ function ClientRow({
           {formatQty(row.promedio_mensual)}
           <UnitTag unit={unit} />
         </td>
-        <td className="px-3 py-1.5 text-right text-body-sm tabular-nums text-on-surface-variant">
-          {row.promedio_usd > 0 ? formatUsd(row.promedio_usd) : "—"}
-        </td>
         <td className="px-3 py-1.5">
           <div className="flex items-center gap-1.5">
             {editable ? (
@@ -343,11 +363,7 @@ function ClientRow({
                 step="1"
                 value={proyeccion}
                 onChange={(e) => setProyeccion(e.target.value)}
-                onBlur={() => {
-                  const rounded = proyeccion.trim() === "" ? "" : String(Math.round(Number(proyeccion)));
-                  setProyeccion(rounded);
-                  persist({ proyeccion: rounded });
-                }}
+                onBlur={flush}
                 placeholder="—"
                 className="w-20 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
@@ -383,11 +399,7 @@ function ClientRow({
               step="0.01"
               value={precio}
               onChange={(e) => setPrecio(e.target.value)}
-              onBlur={() => {
-                const rounded = precio.trim() === "" ? "" : (Math.round(Number(precio) * 100) / 100).toFixed(2);
-                setPrecio(rounded);
-                persist({ precio: rounded });
-              }}
+              onBlur={flush}
               placeholder="US$"
               className="w-20 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
             />
@@ -410,13 +422,14 @@ function ClientRow({
                 onChange={(e) => setFijadoHasta(e.target.value)}
                 onBlur={() => {
                   setShowDate(false);
-                  persist({ fijado_hasta: fijadoHasta || null });
+                  flush();
                 }}
                 className="w-32 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
             ) : (
               <button
                 onClick={() => setShowDate(true)}
+                title="Mantiene esta proyección y precio en los meses siguientes hasta la fecha que elijas"
                 className="rounded-md border border-outline-variant px-2 py-1 text-label-sm text-on-surface-variant hover:bg-surface-container-high"
               >
                 {fijadoHasta ? "Editar" : "Fijar"}
@@ -441,7 +454,7 @@ function ClientRow({
       </tr>
       {overThreshold && (
         <tr className="border-b border-outline-variant last:border-b-0 bg-error-container">
-          <td colSpan={7} className="px-3 py-2">
+          <td colSpan={6} className="px-3 py-2">
             <p className="text-body-sm text-on-error-container">
               <strong>{row.partner}</strong> supera el 100% de su promedio ({formatQty(row.promedio_mensual)} →{" "}
               {formatQty(proyeccionNum)}).

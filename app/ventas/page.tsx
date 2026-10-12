@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { getVendorProductTable, getFullCatalogProductTable, listCatalogProducts } from "@/lib/sales";
 import { openProjectionPeriod, closedMonthsForPeriod, periodLabel, periodStatus } from "@/lib/period";
 import { REGION_LABELS } from "@/lib/regions";
+import { ensureOpenPeriodDefaults } from "@/lib/client-projections";
 import TopNav from "@/components/TopNav";
 import VendorSection from "@/components/VendorSection";
 
@@ -23,6 +24,9 @@ export default async function VentasPage({
   const editable = status === "open";
 
   const closed = closedMonthsForPeriod(period);
+  // First visit of a new month: carry over every still-active "fijado" (pinned) value from earlier
+  // months before the table is built, so a vendedor never sees the plain average where a pin applies.
+  if (editable) await ensureOpenPeriodDefaults(period);
   const [rows, catalog] = await Promise.all([
     session.isSpot
       ? getFullCatalogProductTable(session.vendedor, period)

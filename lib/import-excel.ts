@@ -96,6 +96,17 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     return undefined;
   }
 
+  // Revenue is always the dollar column. The soles column ("Ingreso Total S/.") is never a
+  // fallback: its amounts would be stored and shown as USD, inflating every average and total.
+  function findIngresoUsdColumn(): number | undefined {
+    const exact = findColumnAny("Ingreso Total $", "Ingreso Total US$", "Ingreso Total USD");
+    if (exact !== undefined) return exact;
+    for (const [header, col] of normColIndex) {
+      if (header.startsWith("ingreso") && /\$|usd/.test(header) && !header.includes("s/")) return col;
+    }
+    return undefined;
+  }
+
   const missing = REQUIRED_COLUMNS.filter((c) => findColumn(c) === undefined);
   if (missing.length > 0) {
     throw new Error(
@@ -114,9 +125,15 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     marca: findColumn("Marca"),
     categoria: findColumn("Categoria de Producto N1"),
     categoriaN2: findColumnAny("Categoria N2", "Categoria de Producto N2"),
-    ingreso: findColumnAny("Ingreso Total $", "Ingreso Total S/."),
+    ingreso: findIngresoUsdColumn(),
     precioUnitario: findColumnAny("P. Unitario $.", "P. Unitario $"),
   };
+
+  if (idx.ingreso === undefined) {
+    throw new Error(
+      `No se encontró la columna "Ingreso Total $" (en dólares) en la hoja "${sheetName}". No se usa la columna en soles.`
+    );
+  }
 
   const aggregated = new Map<string, InternalAggregatedRow>();
   const periods = new Set<string>();

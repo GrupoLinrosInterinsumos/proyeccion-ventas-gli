@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { saveProjectionAction } from "@/app/actions";
+import { registerFlush, trackSave } from "@/lib/save-tracker";
 import { formatQty, formatUsd } from "@/lib/format";
 import type { Unit } from "@/lib/units";
 import UnitTag from "./UnitTag";
@@ -27,9 +29,11 @@ export default function EditableProjectionCells({
   ingresoProyectado: number;
   unit: Unit;
 }) {
+  const router = useRouter();
   const [observaciones, setObservaciones] = useState(initialObservaciones ?? "");
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [, startTransition] = useTransition();
+  const lastSaved = useRef(initialObservaciones ?? "");
 
   // The quantity itself is never edited here — it's the auto-summed total from the client
   // breakdown below (see lib/client-projections.ts's syncProductProjectionFromClients). Editing
@@ -46,19 +50,31 @@ export default function EditableProjectionCells({
 
     setStatus("saving");
     startTransition(async () => {
-      const res = await saveProjectionAction(fd);
+      const res = await trackSave(saveProjectionAction(fd));
       setStatus(res?.error ? "error" : "saved");
-      if (!res?.error) setTimeout(() => setStatus("idle"), 1500);
+      if (!res?.error) {
+        lastSaved.current = next;
+        setTimeout(() => setStatus("idle"), 1500);
+        router.refresh(); // so the row picks up the "modified" color
+      }
     });
   }
+
+  // Only a real change counts as an edit (and gets saved / marked green).
+  function flush() {
+    if (observaciones !== lastSaved.current) persistObservaciones(observaciones);
+  }
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(() => registerFlush(() => flushRef.current()), []);
 
   const delta =
     initialProyeccion !== null && promedio > 0 ? (initialProyeccion - promedio) / promedio : null;
 
   return (
     <>
-      <td className="whitespace-nowrap px-3 py-2">
-        <div className="flex items-center gap-2">
+      <td className="px-3 py-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
           <span className="text-body-sm tabular-nums text-on-surface">
             {initialProyeccion !== null ? formatQty(initialProyeccion) : "—"}
             {initialProyeccion !== null && <UnitTag unit={unit} />}
@@ -88,9 +104,9 @@ export default function EditableProjectionCells({
           type="text"
           value={observaciones}
           onChange={(e) => setObservaciones(e.target.value)}
-          onBlur={() => persistObservaciones(observaciones)}
+          onBlur={flush}
           placeholder="Sin observaciones"
-          className="w-full min-w-[180px] rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+          className="w-full min-w-0 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
         />
       </td>
       <td className="w-8 px-2 py-2 text-center">
