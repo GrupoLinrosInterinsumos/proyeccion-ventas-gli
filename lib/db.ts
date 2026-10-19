@@ -113,7 +113,32 @@ CREATE TABLE IF NOT EXISTS projection_corrections (
 );
 CREATE INDEX IF NOT EXISTS idx_projection_corrections_period ON projection_corrections (period);
 
+-- Where a vendedor is with each product of a projection, as they set it: no row = not opened yet.
+CREATE TABLE IF NOT EXISTS product_status (
+  period TEXT NOT NULL,
+  vendedor TEXT NOT NULL,
+  producto_ref TEXT NOT NULL,
+  estado TEXT NOT NULL CHECK (estado IN ('en_proceso','terminado')),
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (period, vendedor, producto_ref)
+);
+
+-- Explanation a vendedor leaves when a client sold more than was projected (comparison page).
+CREATE TABLE IF NOT EXISTS comparison_notes (
+  id SERIAL PRIMARY KEY,
+  period TEXT NOT NULL,
+  vendedor TEXT NOT NULL,
+  producto_ref TEXT NOT NULL,
+  partner TEXT NOT NULL,
+  nota TEXT NOT NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (period, vendedor, producto_ref, partner)
+);
+
 -- Idempotent migrations for tables that already existed before these columns were added.
+ALTER TABLE imports ADD COLUMN IF NOT EXISTS data_hasta DATE;
 ALTER TABLE users ALTER COLUMN vendedor DROP NOT NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_spot BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS categoria_n2 TEXT;

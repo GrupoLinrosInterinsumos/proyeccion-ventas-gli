@@ -6,8 +6,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { query, queryOne } from "@/lib/db";
 import { createSessionCookie, clearSessionCookie, getSession, findUserByEmail } from "@/lib/auth";
-import { parseSalesWorkbook } from "@/lib/import-excel";
-import { commitImport } from "@/lib/import-commit";
+import { importSalesFile } from "@/lib/run-import";
 import { openProjectionPeriod, periodStatus, closedMonthsForPeriod } from "@/lib/period";
 import { isRegion } from "@/lib/regions";
 import { generatePassword } from "@/lib/password";
@@ -16,7 +15,6 @@ import {
   saveClientProjection,
   deleteClientProjection,
   isClientManual,
-  ensureOpenPeriodDefaults,
 } from "@/lib/client-projections";
 
 export type ActionState = { error?: string; success?: string } | null;
@@ -189,14 +187,12 @@ export async function uploadImportAction(_prev: ActionState, formData: FormData)
   if (!(file instanceof File) || file.size === 0) return { error: "Selecciona un archivo .xlsx." };
 
   try {
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const parsed = parseSalesWorkbook(buffer);
-    await commitImport(parsed, file.name, session.id);
-    // Re-derive the untouched default projections of the open period from the freshly imported
-    // sales, for every vendedor. Anything edited or pinned by a vendedor is left alone.
-    await ensureOpenPeriodDefaults(openProjectionPeriod(), { rebuild: true });
+    // Imports the sales and re-derives the untouched default projections of the open period;
+    // anything edited or pinned by a vendedor is left alone.
+    const parsed = await importSalesFile(Buffer.from(await file.arrayBuffer()), file.name, session.id);
     revalidatePath("/ventas");
     revalidatePath("/dashboard");
+    revalidatePath("/comparacion");
     revalidatePath("/importar");
     const periodsMsg = `Periodos actualizados: ${parsed.periods.join(", ")}.`;
     const warnMsg = parsed.warnings.length ? ` (${parsed.warnings.join(" ")})` : "";
@@ -384,7 +380,12 @@ const clientProjectionSchema = z.object({
   proyeccion: z.string().optional(),
   precio: z.string().optional(),
   fijado_hasta: z.string().optional(),
+  // Only when a client is first added: "existente" must be a client already in the system,
+  // "nuevo" must not be (so the same customer isn't created twice under slightly different names).
+  modo: z.enum(["existente", "nuevo"]).optional(),
 });
+
+const SIN_CLIENTE = "Sin cliente registrado";
 
 export async function saveClientProjectionAction(formData: FormData): Promise<ActionState> {
   const session = await getSession();
@@ -402,6 +403,28 @@ export async function saveClientProjectionAction(formData: FormData): Promise<Ac
     return { error: "Esta proyección ya está cerrada y no se puede editar." };
   }
 
+  let partner = data.partner.trim();
+  if (data.modo) {
+    const existing = await queryOne<{ partner: string }>(
+      `SELECT partner FROM (
+         SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), '${SIN_CLIENTE}') AS partner FROM sales
+       ) t WHERE LOWER(partner) = LOWER($1) LIMIT 1`,
+      [partner]
+    );
+    if (data.modo === "existente") {
+      if (!existing) return { error: "Ese cliente no existe en el sistema. Si es nuevo, usa «Crear cliente»." };
+      partner = existing.partner;
+    } else if (existing) {
+      return { error: `«${existing.partner}» ya existe en el sistema. Búscalo en «Agregar cliente».` };
+    }
+    const listed = await queryOne<{ x: number }>(
+      `SELECT 1 AS x FROM client_projections
+       WHERE period = $1 AND vendedor = $2 AND producto_ref = $3 AND LOWER(partner) = LOWER($4)`,
+      [data.period, data.vendedor, data.producto_ref, partner]
+    );
+    if (listed) return { error: "Ese cliente ya está en este producto." };
+  }
+
   const proyeccionNum = data.proyeccion?.trim() ? Number(data.proyeccion) : null;
   if (proyeccionNum !== null && Number.isNaN(proyeccionNum)) return { error: "La proyección debe ser numérica." };
   const precioRaw = data.precio?.trim() ? Number(data.precio) : null;
@@ -414,7 +437,7 @@ export async function saveClientProjectionAction(formData: FormData): Promise<Ac
     vendedor: data.vendedor,
     producto_ref: data.producto_ref,
     producto_nombre: data.producto_nombre,
-    partner: data.partner.trim(),
+    partner,
     proyeccion: proyeccionNum,
     precio: precioNum,
     fijado_hasta: fijadoHasta,
@@ -567,4 +590,84 @@ export async function voidCorrectionAction(_prev: ActionState, formData: FormDat
   );
   revalidatePath("/correcciones");
   return { success: "Corrección anulada." };
+}
+
+// ---------- Estado de trabajo de cada producto (lo elige el vendedor)
+
+const productStatusSchema = z.object({
+  period: z.string().min(1),
+  vendedor: z.string().min(1),
+  producto_ref: z.string().min(1),
+  estado: z.enum(["sin_abrir", "en_proceso", "terminado"]),
+});
+
+/** "sin_abrir" clears the mark; the other two paint the product's row in the projection table. */
+export async function setProductStatusAction(formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session) return { error: "Sesión expirada." };
+
+  const parsed = productStatusSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: "Datos inválidos." };
+  const data = parsed.data;
+
+  if (data.vendedor !== session.vendedor) return { error: "Solo puedes marcar tu propia proyección." };
+  if (periodStatus(data.period) !== "open") return { error: "Esta proyección ya está cerrada y no se puede editar." };
+
+  if (data.estado === "sin_abrir") {
+    await query(`DELETE FROM product_status WHERE period = $1 AND vendedor = $2 AND producto_ref = $3`, [
+      data.period,
+      data.vendedor,
+      data.producto_ref,
+    ]);
+  } else {
+    await query(
+      `INSERT INTO product_status (period, vendedor, producto_ref, estado, updated_by, updated_at)
+       VALUES ($1,$2,$3,$4,$5,now())
+       ON CONFLICT (period, vendedor, producto_ref) DO UPDATE SET
+         estado = excluded.estado, updated_by = excluded.updated_by, updated_at = now()`,
+      [data.period, data.vendedor, data.producto_ref, data.estado, session.id]
+    );
+  }
+  return { success: "Guardado." };
+}
+
+// ---------- Observación de un cliente que superó su proyección (página Comparación)
+
+const comparisonNoteSchema = z.object({
+  period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Periodo inválido."),
+  vendedor: z.string().min(1),
+  producto_ref: z.string().min(1),
+  partner: z.string().min(1),
+  nota: z.string().optional(),
+});
+
+export async function saveComparisonNoteAction(formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session) return { error: "Sesión expirada." };
+
+  const parsed = comparisonNoteSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Datos inválidos." };
+  const data = parsed.data;
+
+  if (data.vendedor !== session.vendedor && !session.isAdmin) {
+    return { error: "Solo puedes comentar tus propios clientes." };
+  }
+
+  const nota = data.nota?.trim() ?? "";
+  if (nota === "") {
+    await query(
+      `DELETE FROM comparison_notes WHERE period = $1 AND vendedor = $2 AND producto_ref = $3 AND partner = $4`,
+      [data.period, data.vendedor, data.producto_ref, data.partner]
+    );
+  } else {
+    await query(
+      `INSERT INTO comparison_notes (period, vendedor, producto_ref, partner, nota, updated_by, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,now())
+       ON CONFLICT (period, vendedor, producto_ref, partner) DO UPDATE SET
+         nota = excluded.nota, updated_by = excluded.updated_by, updated_at = now()`,
+      [data.period, data.vendedor, data.producto_ref, data.partner, nota.slice(0, 500), session.id]
+    );
+  }
+  revalidatePath("/comparacion");
+  return { success: "Observación guardada." };
 }

@@ -38,13 +38,14 @@ export type ProductRow = {
   ingreso_proyectado: number;
   observaciones: string | null;
   is_manual: boolean;
-  /** Someone saved a value for this product (a client's quantity/price, a pin, or a note) — as
-   * opposed to the system-generated default. Drives the green "modified" indicator. */
-  editado: boolean;
+  /** Where the vendedor says they are with this product: null = not opened yet (no color). */
+  estado_usuario: ProductStatus | null;
   /** Quantity sold per month over the 3 closed months ending at the last closed month (oldest first,
    * aligned with `closedMonthsForPeriod(period, SERIES_MONTHS)`) — for the peak-sales chart. */
   serie: number[];
 };
+
+export type ProductStatus = "en_proceso" | "terminado";
 
 export const SERIES_MONTHS = 3;
 
@@ -68,17 +69,13 @@ async function monthlySeriesByProduct(period: string, vendedor: string): Promise
   return result;
 }
 
-/** Products where a person (not the system default) has saved something for this period. */
-async function editedProductRefs(period: string, vendedor: string): Promise<Set<string>> {
-  const rows = await query<{ producto_ref: string }>(
-    `SELECT producto_ref FROM client_projections
-       WHERE period = $1 AND vendedor = $2 AND (updated_by IS NOT NULL OR fijado_hasta IS NOT NULL)
-     UNION
-     SELECT producto_ref FROM projections
-       WHERE period = $1 AND vendedor = $2 AND (is_manual OR NULLIF(TRIM(observaciones), '') IS NOT NULL)`,
+/** The "en proceso" / "terminado" mark the vendedor set on each product (absent = not opened). */
+async function productStatuses(period: string, vendedor: string): Promise<Map<string, ProductStatus>> {
+  const rows = await query<{ producto_ref: string; estado: ProductStatus }>(
+    `SELECT producto_ref, estado FROM product_status WHERE period = $1 AND vendedor = $2`,
     [period, vendedor]
   );
-  return new Set(rows.map((r) => r.producto_ref));
+  return new Map(rows.map((r) => [r.producto_ref, r.estado]));
 }
 
 /** Per producto_ref: sum of proyección × precio across its clients (USD), for one vendedor+period. */
@@ -141,9 +138,9 @@ export async function getVendorProductTable(
   if (periodStatus(projectionPeriod) === "open") await refreshUntouchedPrices(projectionPeriod, vendedor);
   const revenueByRef = await revenueByProduct(projectionPeriod, vendedor);
   const clientQtyByRef = await clientQtySumByProduct(projectionPeriod, vendedor);
-  const [serieByRef, editedRefs] = await Promise.all([
+  const [serieByRef, statusByRef] = await Promise.all([
     monthlySeriesByProduct(projectionPeriod, vendedor),
-    editedProductRefs(projectionPeriod, vendedor),
+    productStatuses(projectionPeriod, vendedor),
   ]);
 
   const projByRef = new Map(projRows.map((p) => [p.producto_ref, p]));
@@ -170,7 +167,7 @@ export async function getVendorProductTable(
       ingreso_proyectado: revenueByRef.get(row.producto_ref) ?? 0,
       observaciones: proj?.observaciones ?? null,
       is_manual: false,
-      editado: editedRefs.has(row.producto_ref),
+      estado_usuario: statusByRef.get(row.producto_ref) ?? null,
       serie: serieByRef.get(row.producto_ref) ?? [],
     });
   }
@@ -205,7 +202,7 @@ export async function getVendorProductTable(
       ingreso_proyectado: revenueByRef.get(proj.producto_ref) ?? 0,
       observaciones: proj.observaciones,
       is_manual: true,
-      editado: true,
+      estado_usuario: statusByRef.get(proj.producto_ref) ?? null,
       serie: serieByRef.get(proj.producto_ref) ?? [],
     });
   }
@@ -297,7 +294,7 @@ export async function getFullCatalogProductTable(vendedor: string, projectionPer
   const projByRef = new Map(projRows.map((p) => [p.producto_ref, p]));
   const revenueByRef = await revenueByProduct(projectionPeriod, vendedor);
   const clientQtyByRef = await clientQtySumByProduct(projectionPeriod, vendedor);
-  const editedRefs = await editedProductRefs(projectionPeriod, vendedor);
+  const statusByRef = await productStatuses(projectionPeriod, vendedor);
   const corrections: { producto_ref: string; producto_nombre: string; proyeccion: number }[] = [];
 
   const rows: ProductRow[] = catalogRows.map((c) => {
@@ -317,7 +314,7 @@ export async function getFullCatalogProductTable(vendedor: string, projectionPer
       ingreso_proyectado: revenueByRef.get(c.producto_ref) ?? 0,
       observaciones: proj?.observaciones ?? null,
       is_manual: false,
-      editado: editedRefs.has(c.producto_ref),
+      estado_usuario: statusByRef.get(c.producto_ref) ?? null,
       serie: [],
     };
   });
@@ -537,99 +534,6 @@ export async function getPeriodComparison(period: string, filters: DashboardFilt
     realUsd: Number(real?.usd ?? 0),
     excedido: isExcedido(proyectado, realQty),
   };
-}
-
-export type PeriodComparisonRow = {
-  vendedor: string;
-  producto_ref: string;
-  producto_nombre: string;
-  unidad: Unit;
-  proyectado: number;
-  real: number;
-  proyectado_usd: number;
-  real_usd: number;
-};
-
-/** Per vendedor+producto detail behind getPeriodComparison, for the drill-down page. */
-export async function getPeriodComparisonBreakdown(
-  previousPeriod: string,
-  filters: DashboardFilters
-): Promise<PeriodComparisonRow[]> {
-  const sales = salesScope([previousPeriod], filters);
-  const proj = projScope(previousPeriod, filters);
-
-  const salesRows = await query<{
-    vendedor: string;
-    producto_ref: string;
-    producto_nombre: string;
-    total: number;
-    usd: number;
-  }>(
-    `SELECT vendedor, producto_ref, MAX(producto_nombre) as producto_nombre,
-            SUM(cantidad) as total, SUM(ingreso_soles) as usd
-     FROM sales WHERE ${sales.where.join(" AND ")}
-     GROUP BY vendedor, producto_ref`,
-    sales.params
-  );
-  const projRows = await query<{
-    vendedor: string;
-    producto_ref: string;
-    producto_nombre: string;
-    proyeccion: number | null;
-  }>(
-    `SELECT vendedor, producto_ref, producto_nombre, proyeccion FROM projections WHERE ${proj.where.join(" AND ")}`,
-    proj.params
-  );
-  const usdRows = await query<{ vendedor: string; producto_ref: string; usd: number }>(
-    `SELECT vendedor, producto_ref,
-            SUM(proyeccion_cantidad * ROUND(precio::numeric, 2)::double precision) AS usd
-     FROM client_projections
-     WHERE ${[...proj.where, `proyeccion_cantidad IS NOT NULL`, `precio IS NOT NULL`].join(" AND ")}
-     GROUP BY vendedor, producto_ref`,
-    proj.params
-  );
-  const saccoRefs = new Set(
-    (
-      await query<{ producto_ref: string }>(
-        `SELECT DISTINCT producto_ref FROM sales WHERE ${saccoCondition()}`
-      )
-    ).map((r) => r.producto_ref)
-  );
-
-  const map = new Map<string, PeriodComparisonRow>();
-  const rowFor = (vendedor: string, producto_ref: string, producto_nombre: string): PeriodComparisonRow => {
-    const key = `${vendedor}::${producto_ref}`;
-    let row = map.get(key);
-    if (!row) {
-      row = {
-        vendedor,
-        producto_ref,
-        producto_nombre,
-        unidad: saccoRefs.has(producto_ref) ? "und" : "kg",
-        proyectado: 0,
-        real: 0,
-        proyectado_usd: 0,
-        real_usd: 0,
-      };
-      map.set(key, row);
-    }
-    return row;
-  };
-
-  for (const r of salesRows) {
-    const row = rowFor(r.vendedor, r.producto_ref, r.producto_nombre);
-    row.real = Number(r.total);
-    row.real_usd = Number(r.usd ?? 0);
-  }
-  for (const p of projRows) {
-    rowFor(p.vendedor, p.producto_ref, p.producto_nombre).proyectado = p.proyeccion != null ? Number(p.proyeccion) : 0;
-  }
-  for (const u of usdRows) {
-    const row = map.get(`${u.vendedor}::${u.producto_ref}`);
-    if (row) row.proyectado_usd = Number(u.usd ?? 0);
-  }
-
-  return [...map.values()].sort((a, b) => b.real_usd - b.proyectado_usd - (a.real_usd - a.proyectado_usd));
 }
 
 export type RegionSummaryRow = Kpis & { region: Region };

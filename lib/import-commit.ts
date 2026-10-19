@@ -68,11 +68,12 @@ export async function commitImport(
 
     await q(BACKFILL_CATEGORIA_N2_SQL);
 
-    await q(`INSERT INTO imports (filename, periods_json, row_count, uploaded_by) VALUES ($1,$2,$3,$4)`, [
+    await q(`INSERT INTO imports (filename, periods_json, row_count, uploaded_by, data_hasta) VALUES ($1,$2,$3,$4,$5)`, [
       filename,
       JSON.stringify(parsed.periods),
       parsed.rows.length,
       uploadedBy,
+      parsed.hasta,
     ]);
   });
 }

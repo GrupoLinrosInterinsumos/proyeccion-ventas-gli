@@ -16,8 +16,6 @@ export type ClientProjectionRow = {
   fijado_hasta: string | null;
   alert_acknowledged: boolean;
   is_manual: boolean;
-  /** A person saved or pinned this row (vs. the system-generated default) — the green indicator. */
-  editado: boolean;
 };
 
 /**
@@ -151,7 +149,6 @@ export async function getClientProjections(
       fijado_hasta,
       alert_acknowledged: saved?.alert_acknowledged ?? false,
       is_manual: saved?.is_manual ?? promedio === 0,
-      editado: saved ? !saved.untouched : fijado_hasta !== null,
     });
   }
 

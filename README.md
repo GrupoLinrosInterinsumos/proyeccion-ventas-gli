@@ -95,3 +95,27 @@ producto, tipo (ajuste +/− o nueva cantidad del mes) y motivo. No se modifica 
 `projection_corrections` guarda cada corrección con autor y fecha, y el export de cobertura las aplica encima
 ("Proyeccion sin grupo" ya corregida, más "Proyeccion sin grupo original" y "Correccion" con el detalle). Una corrección
 se puede anular (queda en el historial). Solo se aceptan meses cerrados; el mes abierto lo editan los vendedores.
+
+## Comparación proyectado vs. vendido (página Comparación)
+
+Compara la proyección de un mes (por cliente) con lo vendido de ese mismo mes hasta hoy, por vendedor, producto y cliente.
+El administrador ve a todos; cada vendedor ve solo lo suyo. Estados (según el avance del mes): **Al día**, **Atrasado**,
+**Superó la proyección**, **Sin proyectar** y **Sin venta**. Cuando un cliente supera su proyección sale una alerta para que el
+vendedor escriba una observación (tabla `comparison_notes`); el número de pendientes aparece en la barra de navegación.
+
+Las ventas salen de la última importación, y la fecha de corte es la de la última venta del archivo (`imports.data_hasta`).
+Para que se actualice todos los días, una tarea programada sube el reporte de ventas acumulado:
+
+```
+curl -X POST -H "Authorization: Bearer <IMPORT_TOKEN>" -F "file=@REPORTE.xlsx" https://proyeccion-ventas.gli.pe/api/import-ventas
+```
+
+`IMPORT_TOKEN` es una variable de entorno en Render (sin ella el endpoint responde 503). Hace la misma importación que
+"Importar data": reemplaza las ventas de los meses del archivo y no toca lo que los vendedores editaron o fijaron.
+
+## Estados de trabajo por producto (página Mi proyección)
+
+Cada vendedor marca sus productos como **En proceso** (amarillo) o **Terminado** (verde); un producto sin abrir no se pinta.
+Abrir un producto por primera vez lo pasa a "En proceso". La lista se puede filtrar por estado (tabla `product_status`).
+En los clientes, **Agregar cliente** busca entre los clientes que ya existen y **Crear cliente** da de alta uno nuevo; un cliente
+fijado se pinta de verde.

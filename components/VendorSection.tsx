@@ -1,10 +1,11 @@
 "use client";
 
-import { Fragment, useMemo, useState, useTransition, type MouseEvent } from "react";
+import { Fragment, useEffect, useMemo, useState, useTransition, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { formatQty, formatQtySplit, formatUsd, initials } from "@/lib/format";
-import type { CatalogProduct, ProductRow } from "@/lib/sales";
-import { deleteProductAction } from "@/app/actions";
+import type { CatalogProduct, ProductRow, ProductStatus } from "@/lib/sales";
+import { deleteProductAction, setProductStatusAction } from "@/app/actions";
+import { trackSave } from "@/lib/save-tracker";
 import EditableProjectionCells from "./EditableProjectionCells";
 import ClientBreakdown from "./ClientBreakdown";
 import AddProductForm from "./AddProductForm";
@@ -20,6 +21,17 @@ import { closedMonthsForPeriod } from "@/lib/period";
 const CHART_MONTHS = 3;
 
 type ProductSortKey = "promedio" | "proyeccion" | "ingreso";
+
+type StatusFilter = "" | "sin_abrir" | ProductStatus;
+
+const STATUS_LABEL: Record<ProductStatus, string> = { en_proceso: "En proceso", terminado: "Terminado" };
+
+/** Row background by the state the vendedor set; a product never opened stays uncolored. */
+function rowTone(estado: ProductStatus | null): string {
+  if (estado === "terminado") return "bg-edited hover:bg-edited-hover";
+  if (estado === "en_proceso") return "bg-progress hover:bg-progress-hover";
+  return "hover:bg-surface-container-low";
+}
 
 const SORT_VALUE: Record<ProductSortKey, (r: ProductRow) => number> = {
   promedio: (r) => r.promedio_mensual,
@@ -49,6 +61,32 @@ export default function VendorSection({
   const [search, setSearch] = useState("");
   const [categoriaN2, setCategoriaN2] = useState("");
   const [sort, setSort] = useState<{ key: ProductSortKey; dir: SortDir } | null>(null);
+  const [estadoFiltro, setEstadoFiltro] = useState<StatusFilter>("");
+  // The vendedor's own "en proceso" / "terminado" marks, updated at once and saved in the background.
+  const [statuses, setStatuses] = useState<Record<string, ProductStatus | null>>(() =>
+    Object.fromEntries(rows.map((r) => [r.producto_ref, r.estado_usuario]))
+  );
+  useEffect(() => {
+    setStatuses(Object.fromEntries(rows.map((r) => [r.producto_ref, r.estado_usuario])));
+  }, [rows]);
+
+  function changeStatus(producto_ref: string, estado: ProductStatus | null) {
+    setStatuses((s) => ({ ...s, [producto_ref]: estado }));
+    const fd = new FormData();
+    fd.set("period", period);
+    fd.set("vendedor", vendedor);
+    fd.set("producto_ref", producto_ref);
+    fd.set("estado", estado ?? "sin_abrir");
+    void trackSave(setProductStatusAction(fd));
+  }
+
+  // Opening a product for the first time marks it "en proceso"; the vendedor moves it to "terminado".
+  function toggleExpanded(producto_ref: string, isOpen: boolean) {
+    setExpanded(isOpen ? null : producto_ref);
+    if (!isOpen && editable && !statuses[producto_ref]) changeStatus(producto_ref, "en_proceso");
+  }
+
+  const hasStatuses = useMemo(() => Object.values(statuses).some(Boolean), [statuses]);
 
   // Kilograms and units are never added together: totals keep them apart.
   const totals = useMemo(() => {
@@ -74,11 +112,13 @@ export default function VendorSection({
     [rows]
   );
 
-  const filtered = categoriaN2 !== "" || search.trim() !== "";
+  const filtered = categoriaN2 !== "" || search.trim() !== "" || estadoFiltro !== "";
 
   const visibleRows = useMemo(() => {
     let list = rows;
     if (categoriaN2) list = list.filter((r) => r.categoria_n2 === categoriaN2);
+    if (estadoFiltro === "sin_abrir") list = list.filter((r) => !statuses[r.producto_ref]);
+    else if (estadoFiltro) list = list.filter((r) => statuses[r.producto_ref] === estadoFiltro);
     const q = search.trim().toLowerCase();
     if (q) {
       list = list.filter(
@@ -91,7 +131,7 @@ export default function VendorSection({
       list = [...list].sort((a, b) => sign * (value(a) - value(b)));
     }
     return list;
-  }, [rows, search, categoriaN2, sort]);
+  }, [rows, search, categoriaN2, estadoFiltro, statuses, sort]);
 
   return (
     <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
@@ -145,18 +185,32 @@ export default function VendorSection({
 
       {open && (
         <div className="border-t border-outline-variant">
-          {(editable || searchable || categoriaOptions.length > 1) && (
+          {(editable || searchable || categoriaOptions.length > 1 || hasStatuses) && (
             <div className="flex flex-wrap items-center gap-2 border-b border-outline-variant bg-surface-container-low px-4 py-2.5">
               {editable && <AddProductForm vendedor={vendedor} catalog={catalog} />}
               <div className="ml-auto flex flex-wrap items-center gap-2">
-                {editable && (
-                  <span
-                    className="flex items-center gap-1.5 text-label-sm text-on-surface-variant"
-                    title="Filas que ya modificaste (valor cambiado, fijado o con observación)"
-                  >
-                    <span className="inline-block h-3 w-3 rounded-sm border border-[#b9dfc1] bg-edited" aria-hidden />
-                    Ya modificado
-                  </span>
+                {(editable || hasStatuses) && (
+                  <>
+                    <span className="flex items-center gap-1.5 text-label-sm text-on-surface-variant" title="Productos que marcaste como en proceso">
+                      <span className="inline-block h-3 w-3 rounded-sm border border-[#f1d58a] bg-progress" aria-hidden />
+                      En proceso
+                    </span>
+                    <span className="flex items-center gap-1.5 text-label-sm text-on-surface-variant" title="Productos que marcaste como terminados">
+                      <span className="inline-block h-3 w-3 rounded-sm border border-[#b9dfc1] bg-edited" aria-hidden />
+                      Terminado
+                    </span>
+                    <select
+                      value={estadoFiltro}
+                      onChange={(e) => setEstadoFiltro(e.target.value as StatusFilter)}
+                      aria-label="Filtrar por estado"
+                      className="rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                    >
+                      <option value="">Todos los estados</option>
+                      <option value="sin_abrir">Sin abrir</option>
+                      <option value="en_proceso">En proceso</option>
+                      <option value="terminado">Terminado</option>
+                    </select>
+                  </>
                 )}
                 {categoriaOptions.length > 1 && (
                   <select
@@ -188,10 +242,11 @@ export default function VendorSection({
             <table className="w-full min-w-[760px] table-fixed border-collapse">
               <colgroup>
                 <col />
-                <col className="w-[120px]" />
-                <col className="w-[104px]" />
-                <col className="w-[172px]" />
-                <col className="w-[190px]" />
+                <col className="w-[124px]" />
+                <col className="w-[112px]" />
+                <col className="w-[96px]" />
+                <col className="w-[168px]" />
+                <col className="w-[170px]" />
                 <col className="w-[28px]" />
               </colgroup>
               <thead>
@@ -204,6 +259,9 @@ export default function VendorSection({
                     >
                       {filtered ? `${visibleRows.length} de ${rows.length}` : rows.length}
                     </span>
+                  </th>
+                  <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">
+                    Estado
                   </th>
                   <th className="px-3 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">
                     <SortButton
@@ -245,14 +303,11 @@ export default function VendorSection({
                 {visibleRows.map((row) => {
                   const key = row.producto_ref;
                   const isOpen = expanded === key;
+                  const estado = statuses[key] ?? null;
                   return (
                     <Fragment key={key}>
-                      <tr
-                        className={`cursor-pointer border-b border-outline-variant last:border-b-0 ${
-                          row.editado ? "bg-edited hover:bg-edited-hover" : "hover:bg-surface-container-low"
-                        }`}
-                      >
-                        <td className="px-3 py-2" onClick={() => setExpanded(isOpen ? null : key)}>
+                      <tr className={`cursor-pointer border-b border-outline-variant last:border-b-0 ${rowTone(estado)}`}>
+                        <td className="px-3 py-2" onClick={() => toggleExpanded(key, isOpen)}>
                           <div className="flex items-start gap-2">
                             <span
                               className={`mt-0.5 shrink-0 text-on-surface-variant transition-transform ${isOpen ? "rotate-90" : ""}`}
@@ -282,14 +337,23 @@ export default function VendorSection({
                             </div>
                           </div>
                         </td>
+                        <td className="px-3 py-2">
+                          {editable ? (
+                            <StatusSelect value={estado} onChange={(e) => changeStatus(key, e)} />
+                          ) : estado ? (
+                            <span className="rounded-full bg-surface-container-high px-2 py-0.5 text-label-sm font-medium text-on-surface-variant">
+                              {STATUS_LABEL[estado]}
+                            </span>
+                          ) : null}
+                        </td>
                         <td
                           className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface"
-                          onClick={() => setExpanded(isOpen ? null : key)}
+                          onClick={() => toggleExpanded(key, isOpen)}
                         >
                           {formatQty(row.promedio_mensual)}
                           <UnitTag unit={unitForCategoria(row.categoria_n2)} />
                         </td>
-                        <td className="px-3 py-2" onClick={() => setExpanded(isOpen ? null : key)}>
+                        <td className="px-3 py-2" onClick={() => toggleExpanded(key, isOpen)}>
                           <MonthlySparkline
                             values={row.serie}
                             months={chartMonths}
@@ -349,7 +413,7 @@ export default function VendorSection({
                       </tr>
                       {isOpen && (
                         <tr className="border-b border-outline-variant last:border-b-0">
-                          <td colSpan={6} className="p-0">
+                          <td colSpan={7} className="p-0">
                             <ClientBreakdown
                               vendedor={vendedor}
                               producto_ref={row.producto_ref}
@@ -370,6 +434,35 @@ export default function VendorSection({
         </div>
       )}
     </section>
+  );
+}
+
+/** The vendedor's own mark on a product: not opened (no color), in process (amber) or finished (green). */
+function StatusSelect({
+  value,
+  onChange,
+}: {
+  value: ProductStatus | null;
+  onChange: (estado: ProductStatus | null) => void;
+}) {
+  const tone =
+    value === "terminado"
+      ? "border-[#b9dfc1] bg-edited text-[#1b5e2f]"
+      : value === "en_proceso"
+        ? "border-[#f1d58a] bg-progress text-[#7a4b00]"
+        : "border-outline-variant bg-surface-container-lowest text-on-surface-variant";
+  return (
+    <select
+      value={value ?? "sin_abrir"}
+      onChange={(e) => onChange(e.target.value === "sin_abrir" ? null : (e.target.value as ProductStatus))}
+      onClick={(e) => e.stopPropagation()}
+      aria-label="Estado del producto"
+      className={`w-full rounded-md border px-2 py-1 text-label-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 ${tone}`}
+    >
+      <option value="sin_abrir">Sin abrir</option>
+      <option value="en_proceso">En proceso</option>
+      <option value="terminado">Terminado</option>
+    </select>
   );
 }
 

@@ -53,9 +53,11 @@ const config: Config = {
         "on-background": "#191c1e",
         "surface-variant": "#e1e2e5",
         "surface-lowest": "#ffffff",
-        // "Already modified" rows: light green so a person-edited row stands out from defaults.
+        // Row colors by the state the vendedor sets: "terminado" light green, "en proceso" light amber.
         edited: "#e7f5ea",
         "edited-hover": "#d9eedd",
+        progress: "#fff4d6",
+        "progress-hover": "#ffecc2",
       },
       fontFamily: {
         sans: [

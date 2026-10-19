@@ -3,9 +3,10 @@ import { logoutAction } from "@/app/actions";
 import { initials } from "@/lib/format";
 import type { SessionUser } from "@/lib/auth";
 import { REGION_LABELS } from "@/lib/regions";
+import { countPendingAlerts, currentMonthPeriod } from "@/lib/comparison";
 import GliLogo from "./GliLogo";
 
-export default function TopNav({
+export default async function TopNav({
   session,
   active,
   period,
@@ -16,9 +17,20 @@ export default function TopNav({
   period?: string;
 }) {
   const withPeriod = (href: string) => (period ? `${href}?period=${encodeURIComponent(period)}` : href);
-  const links: { href: string; label: string }[] = [];
+  const links: { href: string; label: string; badge?: number }[] = [];
   if (session.vendedor) links.push({ href: "/ventas", label: "Mi proyección" });
   links.push({ href: "/dashboard", label: "Dashboard" });
+  // Quick access to the month-to-date comparison; for a vendedor it carries the number of clients
+  // that sold above their projection and still need an observation.
+  let pendientes = 0;
+  if (session.vendedor) {
+    try {
+      pendientes = await countPendingAlerts(session.vendedor, currentMonthPeriod());
+    } catch {
+      pendientes = 0; // never let the badge break a page
+    }
+  }
+  links.push({ href: "/comparacion", label: "Comparación", badge: pendientes });
   if (session.isAdmin) {
     links.push({ href: "/importar", label: "Importar data" });
     links.push({ href: "/correcciones", label: "Correcciones" });
@@ -56,6 +68,14 @@ export default function TopNav({
                 }`}
               >
                 {l.label}
+                {l.badge ? (
+                  <span
+                    className="ml-1.5 inline-flex min-w-[18px] items-center justify-center rounded-full bg-secondary px-1.5 text-label-sm font-semibold text-on-secondary"
+                    title="Clientes que superaron su proyección y esperan una observación"
+                  >
+                    {l.badge}
+                  </span>
+                ) : null}
               </Link>
             ))}
           </nav>

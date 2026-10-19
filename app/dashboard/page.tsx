@@ -68,11 +68,7 @@ export default async function DashboardPage({
     getDashboardKpis(period, dashboardFilters),
     getPeriodComparison(period, dashboardFilters),
   ]);
-  const comparisonHref = `/dashboard/comparacion?period=${encodeURIComponent(period)}&targetPeriod=${encodeURIComponent(
-    comparison.previousPeriod
-  )}${region ? `&region=${encodeURIComponent(region)}` : ""}${
-    vendedor ? `&vendedor=${encodeURIComponent(vendedor)}` : ""
-  }${categoriaN2 ? `&categoriaN2=${encodeURIComponent(categoriaN2)}` : ""}`;
+  const comparisonHref = `/comparacion?period=${encodeURIComponent(comparison.previousPeriod)}`;
 
   return (
     <div className="min-h-screen bg-surface-container-low">

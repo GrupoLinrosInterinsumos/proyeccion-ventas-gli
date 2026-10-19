@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { formatQty, formatUsd } from "@/lib/format";
 import { saveClientProjectionAction, deleteClientProjectionAction } from "@/app/actions";
+import AddClientForm from "./AddClientForm";
 import { registerFlush, trackSave } from "@/lib/save-tracker";
 import SortButton, { nextSort, type SortDir } from "./SortButton";
 import UnitTag from "./UnitTag";
@@ -46,7 +47,8 @@ export default function ClientBreakdown({
 }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [addingClient, setAddingClient] = useState(false);
+  // "existente": pick a client already in the system; "nuevo": create one that isn't there yet.
+  const [addMode, setAddMode] = useState<"existente" | "nuevo" | null>(null);
   const [sort, setSort] = useState<{ key: ClientSortKey; dir: SortDir } | null>(null);
   const router = useRouter();
 
@@ -99,13 +101,23 @@ export default function ClientBreakdown({
         <p className="text-label-md uppercase tracking-wide text-on-surface-variant">
           Clientes &middot; últimos 3 meses cerrados
         </p>
-        {editable && !addingClient && (
-          <button
-            onClick={() => setAddingClient(true)}
-            className="rounded-md px-2 py-1 text-label-sm font-medium text-primary hover:bg-primary-fixed/40"
-          >
-            + Agregar cliente
-          </button>
+        {editable && !addMode && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setAddMode("existente")}
+              title="Busca y elige un cliente que ya existe en el sistema"
+              className="rounded-md px-2 py-1 text-label-sm font-medium text-primary hover:bg-primary-fixed/40"
+            >
+              + Agregar cliente
+            </button>
+            <button
+              onClick={() => setAddMode("nuevo")}
+              title="Crea un cliente que todavía no existe en el sistema"
+              className="rounded-md border border-outline-variant px-2 py-1 text-label-sm font-medium text-on-surface-variant hover:bg-surface-container-high"
+            >
+              Crear cliente
+            </button>
+          </div>
         )}
       </div>
 
@@ -114,7 +126,7 @@ export default function ClientBreakdown({
 
       {rows && (
         <div className="overflow-hidden rounded-md border border-outline-variant bg-surface-container-lowest">
-          {rows.length === 0 && !addingClient ? (
+          {rows.length === 0 && !addMode ? (
             <p className="px-3 py-2 text-body-sm text-on-surface-variant">Sin ventas registradas en el periodo.</p>
           ) : (
             <table className="w-full table-fixed border-collapse">
@@ -203,18 +215,19 @@ export default function ClientBreakdown({
         </div>
       )}
 
-      {addingClient && (
+      {addMode && (
         <AddClientForm
+          mode={addMode}
           vendedor={vendedor}
           producto_ref={producto_ref}
           producto_nombre={producto_nombre}
           period={period}
           onDone={() => {
-            setAddingClient(false);
+            setAddMode(null);
             load();
             router.refresh();
           }}
-          onCancel={() => setAddingClient(false)}
+          onCancel={() => setAddMode(null)}
         />
       )}
     </div>
@@ -247,7 +260,6 @@ function ClientRow({
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const [edited, setEdited] = useState(row.editado);
   // What the server currently has, to tell a real edit from just tabbing through a field.
   const lastSaved = useRef({
     proyeccion: row.proyeccion?.toString() ?? "",
@@ -287,7 +299,6 @@ function ClientRow({
           precio: next.precio ?? precio,
           fijado: fh ?? "",
         };
-        setEdited(true);
         onSaved();
         setTimeout(() => setStatus("idle"), 1200);
       }
@@ -326,7 +337,7 @@ function ClientRow({
 
   return (
     <>
-      <tr className={`border-b border-outline-variant last:border-b-0 ${edited ? "bg-edited" : ""}`}>
+      <tr className={`border-b border-outline-variant last:border-b-0 ${fijadoHasta ? "bg-edited" : ""}`}>
         <td className="break-words px-3 py-1.5 text-body-sm text-on-surface">
           {row.partner}
           {row.is_manual && (
@@ -463,86 +474,5 @@ function ClientRow({
         </tr>
       )}
     </>
-  );
-}
-
-function AddClientForm({
-  vendedor,
-  producto_ref,
-  producto_nombre,
-  period,
-  onDone,
-  onCancel,
-}: {
-  vendedor: string;
-  producto_ref: string;
-  producto_nombre: string;
-  period: string;
-  onDone: () => void;
-  onCancel: () => void;
-}) {
-  const [partner, setPartner] = useState("");
-  const [proyeccion, setProyeccion] = useState("");
-  const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-
-  function submit() {
-    if (!partner.trim()) {
-      setError("Escribe el nombre del cliente.");
-      return;
-    }
-    const fd = new FormData();
-    fd.set("period", period);
-    fd.set("vendedor", vendedor);
-    fd.set("producto_ref", producto_ref);
-    fd.set("producto_nombre", producto_nombre);
-    fd.set("partner", partner.trim());
-    fd.set("proyeccion", proyeccion);
-    fd.set("precio", "");
-    startTransition(async () => {
-      const res = await saveClientProjectionAction(fd);
-      if (res?.error) setError(res.error);
-      else onDone();
-    });
-  }
-
-  return (
-    <div className="mt-2 flex flex-wrap items-end gap-2 rounded-md border border-dashed border-outline-variant bg-surface-container-lowest p-3">
-      <div className="flex flex-col gap-1">
-        <label className="text-label-sm text-on-surface-variant">Cliente</label>
-        <input
-          value={partner}
-          onChange={(e) => setPartner(e.target.value)}
-          placeholder="Nombre del cliente"
-          className="w-56 rounded-md border border-outline-variant bg-surface-container-low px-2 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-        />
-      </div>
-      <div className="flex flex-col gap-1">
-        <label className="text-label-sm text-on-surface-variant">Proyección</label>
-        <input
-          type="number"
-          inputMode="decimal"
-          value={proyeccion}
-          onChange={(e) => setProyeccion(e.target.value)}
-          placeholder="0"
-          className="w-24 rounded-md border border-outline-variant bg-surface-container-low px-2 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-        />
-      </div>
-      <button
-        onClick={submit}
-        disabled={pending}
-        className="h-touch rounded-md bg-primary px-4 text-body-sm font-medium text-on-primary hover:opacity-90 disabled:opacity-60"
-      >
-        {pending ? "Guardando…" : "Guardar"}
-      </button>
-      <button
-        type="button"
-        onClick={onCancel}
-        className="h-touch rounded-md px-3 text-body-sm text-on-surface-variant hover:bg-surface-container-high"
-      >
-        Cancelar
-      </button>
-      {error && <p className="w-full text-body-sm text-secondary">{error}</p>}
-    </div>
   );
 }

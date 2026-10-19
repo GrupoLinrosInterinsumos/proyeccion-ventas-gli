@@ -24,6 +24,8 @@ type InternalAggregatedRow = AggregatedSaleRow & { precioPonderadoSum: number; c
 export type ParseResult = {
   rows: AggregatedSaleRow[];
   periods: string[];
+  /** Date (YYYY-MM-DD) of the most recent sale in the file — how current the data is. */
+  hasta: string | null;
   sourceRowCount: number;
   warnings: string[];
 };
@@ -150,6 +152,7 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
   let invalidRows = 0;
   let excludedVendedorRows = 0;
   let sourceRowCount = 0;
+  let lastDate: Date | null = null;
 
   for (let r = range.s.r + 1; r <= range.e.r; r++) {
     const row = sheet[r];
@@ -183,6 +186,7 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     }
     const period = periodKey(fecha.getFullYear(), fecha.getMonth() + 1);
     periods.add(period);
+    if (!lastDate || fecha > lastDate) lastDate = fecha;
 
     const partner = idx.partner != null ? String(row[idx.partner]?.v ?? "").trim() : "";
     const marca = idx.marca != null ? String(row[idx.marca]?.v ?? "").trim() : "";
@@ -242,9 +246,14 @@ export function parseSalesWorkbook(buffer: Buffer): ParseResult {
     })
   );
 
+  const hasta = lastDate
+    ? `${lastDate.getFullYear()}-${String(lastDate.getMonth() + 1).padStart(2, "0")}-${String(lastDate.getDate()).padStart(2, "0")}`
+    : null;
+
   return {
     rows,
     periods: [...periods].sort(),
+    hasta,
     sourceRowCount,
     warnings,
   };
