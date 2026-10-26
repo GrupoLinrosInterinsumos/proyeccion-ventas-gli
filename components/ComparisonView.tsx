@@ -6,6 +6,7 @@ import { saveComparisonNoteAction } from "@/app/actions";
 import { formatQty, formatUsdCompact, initials } from "@/lib/format";
 import type { MonthComparison } from "@/lib/comparison";
 import type { Unit } from "@/lib/units";
+import { REGIONS, REGION_LABELS, type Region } from "@/lib/regions";
 import UnitTag from "./UnitTag";
 
 type Estado = "Al día" | "Atrasado" | "Superó la proyección" | "Sin proyectar" | "Sin venta" | "";
@@ -142,6 +143,7 @@ export default function ComparisonView({
   const [notas, setNotas] = useState<Record<string, string>>(data.notas);
   useEffect(() => setNotas(data.notas), [data.notas]);
 
+  const [fSede, setFSede] = useState("");
   const [fVend, setFVend] = useState("");
   const [fCat, setFCat] = useState("");
   const [fEstado, setFEstado] = useState("");
@@ -185,7 +187,20 @@ export default function ComparisonView({
     () => [...new Set(Object.values(data.productos).map((p) => p.c))].sort((a, b) => a.localeCompare(b, "es")),
     [data.productos]
   );
-  const nombresVend = useMemo(() => [...vendedores.keys()].sort((a, b) => a.localeCompare(b, "es")), [vendedores]);
+  const sedeDe = (v: string) => data.sedes[v] ?? "";
+  const sedeLabel = (v: string) => REGION_LABELS[sedeDe(v) as Region] ?? "";
+  // Sedes that actually have data, in the usual order; the vendedor list narrows to the chosen sede.
+  const sedesConDatos = useMemo(
+    () => REGIONS.filter((r) => [...vendedores.keys()].some((v) => data.sedes[v] === r)),
+    [vendedores, data.sedes]
+  );
+  const nombresVend = useMemo(
+    () =>
+      [...vendedores.keys()]
+        .filter((v) => !fSede || data.sedes[v] === fSede)
+        .sort((a, b) => a.localeCompare(b, "es")),
+    [vendedores, fSede, data.sedes]
+  );
   const term = norm(q.trim());
 
   function visibleProducts(v: string): Prod[] {
@@ -210,7 +225,7 @@ export default function ComparisonView({
   }
 
   const blocks = useMemo(() => {
-    const names = fVend ? [fVend] : nombresVend;
+    const names = fVend ? [fVend] : nombresVend; // nombresVend already respects the sede
     const out: { v: string; prods: Prod[]; t: Totals; pendientes: number }[] = [];
     for (const v of names) {
       if (!vendedores.has(v)) continue;
@@ -226,12 +241,20 @@ export default function ComparisonView({
   const T = totals(all);
   const pendientesTotal = useMemo(() => {
     let n = 0;
-    for (const [v, vv] of vendedores) for (const pr of vv.values()) n += pendingIn(v, pr);
+    for (const [v, vv] of vendedores) {
+      if (fSede && data.sedes[v] !== fSede) continue;
+      for (const pr of vv.values()) n += pendingIn(v, pr);
+    }
     return n;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vendedores, notas, avance]);
+  }, [vendedores, notas, avance, fSede, data.sedes]);
 
   const forceOpen = !!fVend || !!term || !!pick || soloPendientes;
+  // A sede/vendedor pair that doesn't match (chosen before the sede) would show nothing: reset it.
+  const cambiarSede = (sede: string) => {
+    setFSede(sede);
+    if (fVend && sede && data.sedes[fVend] !== sede) setFVend("");
+  };
 
   return (
     <div>
@@ -253,6 +276,16 @@ export default function ComparisonView({
       )}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
+        {isAdmin && sedesConDatos.length > 1 && (
+          <select value={fSede} onChange={(e) => cambiarSede(e.target.value)} className={selectClass} aria-label="Sede">
+            <option value="">Todas las sedes</option>
+            {sedesConDatos.map((r) => (
+              <option key={r} value={r}>
+                {REGION_LABELS[r]}
+              </option>
+            ))}
+          </select>
+        )}
         {isAdmin && (
           <select value={fVend} onChange={(e) => setFVend(e.target.value)} className={selectClass} aria-label="Vendedor">
             <option value="">Todos los vendedores</option>
@@ -275,6 +308,8 @@ export default function ComparisonView({
         </select>
         <SearchBox
           vendedores={vendedores}
+          sedes={data.sedes}
+          fSede={fSede}
           fVend={fVend}
           fCat={fCat}
           q={q}
@@ -352,7 +387,14 @@ export default function ComparisonView({
                       {initials(v)}
                     </span>
                     <div>
-                      <h3 className="text-body-lg font-semibold text-on-surface">{v}</h3>
+                      <h3 className="text-body-lg font-semibold text-on-surface">
+                        {v}
+                        {isAdmin && sedeLabel(v) && (
+                          <span className="ml-2 rounded bg-surface-container-high px-1.5 py-0.5 text-label-sm font-medium text-on-surface-variant">
+                            {sedeLabel(v)}
+                          </span>
+                        )}
+                      </h3>
                       <p className="text-label-sm text-on-surface-variant">
                         {prods.length} producto{prods.length === 1 ? "" : "s"}
                         {pendientes > 0 && (
@@ -702,6 +744,8 @@ function NoteRow({
 /** Search box with suggestions: type to see matching products and clients, pick one to filter exactly. */
 function SearchBox({
   vendedores,
+  sedes,
+  fSede,
   fVend,
   fCat,
   q,
@@ -709,6 +753,8 @@ function SearchBox({
   onPick,
 }: {
   vendedores: Map<string, Map<string, Prod>>;
+  sedes: Record<string, string>;
+  fSede: string;
   fVend: string;
   fCat: string;
   q: string;
@@ -726,6 +772,7 @@ function SearchBox({
     const clis = new Set<string>();
     for (const [v, vv] of vendedores) {
       if (fVend && v !== fVend) continue;
+      if (fSede && sedes[v] !== fSede) continue;
       for (const pr of vv.values()) {
         if (fCat && pr.cat !== fCat) continue;
         prods.set(pr.ref, pr);
@@ -747,7 +794,7 @@ function SearchBox({
       .sort((a, b) => a.r - b.r || a.name.localeCompare(b.name, "es"))
       .slice(0, 6);
     return [...pm, ...cm];
-  }, [term, vendedores, fVend, fCat]);
+  }, [term, vendedores, sedes, fSede, fVend, fCat]);
 
   useEffect(() => setActive(0), [term]);
   useEffect(() => {

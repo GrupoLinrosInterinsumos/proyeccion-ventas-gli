@@ -23,6 +23,8 @@ export type MonthComparison = {
   productos: Record<string, ComparisonProduct>;
   /** Observaciones left on "superó la proyección" clients, keyed `vendedor|producto_ref|partner`. */
   notas: Record<string, string>;
+  /** Sede (LIMA / AREQUIPA / TRUJILLO) of each vendedor in the data, for the sede filter. */
+  sedes: Record<string, string>;
   /** Date (YYYY-MM-DD) up to which the sales data goes; null when there are no sales for the month. */
   hasta: string | null;
   /** When the data was last refreshed (ISO). */
@@ -108,6 +110,17 @@ export async function getMonthComparison(period: string, vendedor?: string): Pro
   const notas: Record<string, string> = {};
   for (const n of notasRows) notas[`${n.vendedor}|${n.producto_ref}|${n.partner}`] = n.nota;
 
+  // The sede of a vendedor is the region of their account; vendedores without one fall back to the
+  // region their sales were booked under.
+  const sedeRows = await query<{ vendedor: string; region: string | null }>(
+    `SELECT vendedor, region FROM users WHERE vendedor IS NOT NULL AND region IS NOT NULL
+     UNION ALL
+     SELECT vendedor, MAX(region) FROM sales WHERE period = $1 GROUP BY vendedor`,
+    [period]
+  );
+  const sedes: Record<string, string> = {};
+  for (const s of sedeRows) if (s.region && !sedes[s.vendedor]) sedes[s.vendedor] = s.region;
+
   // How current the sales are: the newest import that carried this month.
   const imp = await queryOne<{ data_hasta: string | null; uploaded_at: string }>(
     `SELECT data_hasta::text AS data_hasta,
@@ -122,6 +135,7 @@ export async function getMonthComparison(period: string, vendedor?: string): Pro
     rows: [...rows.values()].map(([v, ref, c, pq, pu, rq, ru]) => [v, ref, c, r2(pq), r2(pu), r2(rq), r2(ru)]),
     productos,
     notas,
+    sedes,
     hasta: imp?.data_hasta ?? null,
     actualizado: imp?.uploaded_at ?? null,
   };
