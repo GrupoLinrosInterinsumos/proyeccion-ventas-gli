@@ -118,17 +118,24 @@ export async function getClientProjections(
     const saved = savedByPartner.get(partner);
     const carry = carryByPartner.get(partner);
 
-    const proyeccion =
-      saved?.proyeccion_cantidad ?? carry?.proyeccion_cantidad ?? (promedio > 0 ? promedio : null);
+    // Defaults (average, imported price, carried-over pin) only fill in a row with nothing saved.
+    // Once a row is saved, what it holds is what the vendedor left: clearing a quantity or a pin
+    // must stay cleared, not come back as the default the next time the page loads (that made the
+    // number reappear on screen while the product total no longer counted it).
+    const proyeccion = saved
+      ? saved.proyeccion_cantidad
+      : (carry?.proyeccion_cantidad ?? (promedio > 0 ? promedio : null));
     const importedPrecio = priceByPartner.get(partner);
     // A saved row nobody ever edited (system-materialized default, not pinned) always follows
     // the current P. Unitario price — this also replaces defaults saved by the old ingreso/cantidad
     // method. Anything a person typed, or a pinned row, keeps its own value.
+    // (A price left blank still falls back to the imported one: older rows saved before prices had
+    // a default must not lose it, and re-filling a cleared price with the real one is harmless.)
     const rawPrecio = saved?.untouched
       ? (importedPrecio ?? null)
       : (saved?.precio ?? carry?.precio ?? importedPrecio ?? null);
     const precio = rawPrecio !== null ? round2(rawPrecio) : null;
-    const fijado_hasta = saved?.fijado_hasta ?? carry?.fijado_hasta ?? null;
+    const fijado_hasta = saved ? saved.fijado_hasta : (carry?.fijado_hasta ?? null);
 
     if (saved?.untouched && (saved.precio === null ? null : round2(saved.precio)) !== precio) {
       stalePrices = true;
