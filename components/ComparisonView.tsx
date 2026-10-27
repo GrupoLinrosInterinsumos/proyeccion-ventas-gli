@@ -151,7 +151,7 @@ export default function ComparisonView({
   const [q, setQ] = useState("");
   const [pick, setPick] = useState<{ t: "p" | "c"; v: string } | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "proy", dir: -1 });
-  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [open, setOpen] = useState<Set<string>>(new Set(ownVendedor ? [ownVendedor] : []));
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [allOpen, setAllOpen] = useState(false);
 
@@ -229,11 +229,13 @@ export default function ComparisonView({
     const out: { v: string; prods: Prod[]; t: Totals; pendientes: number }[] = [];
     for (const v of names) {
       if (!vendedores.has(v)) continue;
+      if (soloPendientes && !isAdmin && v !== ownVendedor) continue;
       const prods = visibleProducts(v);
       if (prods.length === 0) continue;
       out.push({ v, prods, t: totals(prods), pendientes: prods.reduce((s, p) => s + pendingIn(v, p), 0) });
     }
-    return out.sort((a, b) => b.t.uR + b.t.uP - (a.t.uR + a.t.uP));
+    const mio = (v: string) => (v === ownVendedor ? -1 : 0); // your own section comes first
+    return out.sort((a, b) => mio(a.v) - mio(b.v) || b.t.uR + b.t.uP - (a.t.uR + a.t.uP));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vendedores, fVend, fCat, fEstado, soloPendientes, pick, term, sort, notas, nombresVend, avance]);
 
@@ -243,11 +245,12 @@ export default function ComparisonView({
     let n = 0;
     for (const [v, vv] of vendedores) {
       if (fSede && data.sedes[v] !== fSede) continue;
+      if (!isAdmin && v !== ownVendedor) continue; // a vendedor is only asked about their own clients
       for (const pr of vv.values()) n += pendingIn(v, pr);
     }
     return n;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vendedores, notas, avance, fSede, data.sedes]);
+  }, [vendedores, notas, avance, fSede, data.sedes, isAdmin, ownVendedor]);
 
   const forceOpen = !!fVend || !!term || !!pick || soloPendientes;
   // A sede/vendedor pair that doesn't match (chosen before the sede) would show nothing: reset it.
@@ -263,8 +266,9 @@ export default function ComparisonView({
           <p className="text-body-sm">
             <strong>
               {pendientesTotal} cliente{pendientesTotal === 1 ? "" : "s"}
+              {!isAdmin && (pendientesTotal === 1 ? " tuyo" : " tuyos")}
             </strong>{" "}
-            superaron su proyección y falta una observación{!isAdmin ? ". Escribe qué pasó para cada uno." : "."}
+            superaron su proyección y falta {isAdmin ? "una observación." : "tu observación. Escribe qué pasó con cada uno."}
           </p>
           <button
             onClick={() => setSoloPendientes((s) => !s)}
@@ -276,7 +280,7 @@ export default function ComparisonView({
       )}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        {isAdmin && sedesConDatos.length > 1 && (
+        {sedesConDatos.length > 1 && (
           <select value={fSede} onChange={(e) => cambiarSede(e.target.value)} className={selectClass} aria-label="Sede">
             <option value="">Todas las sedes</option>
             {sedesConDatos.map((r) => (
@@ -286,7 +290,7 @@ export default function ComparisonView({
             ))}
           </select>
         )}
-        {isAdmin && (
+        {nombresVend.length > 1 && (
           <select value={fVend} onChange={(e) => setFVend(e.target.value)} className={selectClass} aria-label="Vendedor">
             <option value="">Todos los vendedores</option>
             {nombresVend.map((v) => (
@@ -389,7 +393,12 @@ export default function ComparisonView({
                     <div>
                       <h3 className="text-body-lg font-semibold text-on-surface">
                         {v}
-                        {isAdmin && sedeLabel(v) && (
+                        {v === ownVendedor && (
+                          <span className="ml-2 rounded bg-primary-fixed px-1.5 py-0.5 text-label-sm font-medium text-on-primary-fixed-variant">
+                            Tú
+                          </span>
+                        )}
+                        {sedeLabel(v) && (
                           <span className="ml-2 rounded bg-surface-container-high px-1.5 py-0.5 text-label-sm font-medium text-on-surface-variant">
                             {sedeLabel(v)}
                           </span>

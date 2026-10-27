@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { currentMonthPeriod, getMonthComparison } from "@/lib/comparison";
 import { periodLabel } from "@/lib/period";
-import { REGION_LABELS } from "@/lib/regions";
 import TopNav from "@/components/TopNav";
 import ComparisonView from "@/components/ComparisonView";
 
@@ -38,8 +37,9 @@ export default async function ComparacionPage({ searchParams }: { searchParams: 
   const requested = (await searchParams).period?.trim() ?? "";
   const period = PERIOD_RE.test(requested) && requested <= current ? requested : current;
 
-  // A vendedor sees only their own clients; admins see everyone.
-  const data = await getMonthComparison(period, session.isAdmin ? undefined : (session.vendedor ?? "__ninguno__"));
+  // This page (and only this page) is open to everyone: every vendedor sees every vendedor's comparison.
+  // Writing stays restricted: a vendedor can only leave observations on their own clients.
+  const data = await getMonthComparison(period);
 
   const [py, pm] = period.split("-").map(Number);
   const diasMes = new Date(py, pm, 0).getDate();
@@ -64,8 +64,7 @@ export default async function ComparacionPage({ searchParams }: { searchParams: 
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-label-md uppercase tracking-wide text-on-surface-variant">
-              {session.region && !session.isAdmin ? `${REGION_LABELS[session.region]} · ` : ""}
-              {session.isAdmin ? "Resumen general" : "Mi comparación"} &middot; {periodLabel(period)}
+              Resumen general &middot; {periodLabel(period)}
               {hastaLabel && (
                 <span className="ml-2 rounded bg-surface-container-high px-1.5 py-0.5 normal-case text-on-surface-variant">
                   Ventas al {hastaLabel}
@@ -98,7 +97,7 @@ export default async function ComparacionPage({ searchParams }: { searchParams: 
 
         {data.rows.length === 0 ? (
           <div className="rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest p-10 text-center text-body-md text-on-surface-variant">
-            Aún no hay proyección ni ventas de {periodLabel(period)}{session.isAdmin ? "" : " para ti"}.
+            Aún no hay proyección ni ventas de {periodLabel(period)}.
           </div>
         ) : (
           <ComparisonView
