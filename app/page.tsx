@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
-import { listRecentPeriods, periodLabel } from "@/lib/period";
+import { cierreHoraLabel, listRecentPeriods, periodLabel } from "@/lib/period";
 import { REGION_LABELS } from "@/lib/regions";
 import TopNav from "@/components/TopNav";
 
@@ -22,7 +22,7 @@ export default async function HomePage() {
         <h1 className="text-headline-md text-on-surface">Proyecciones</h1>
         <p className="mt-1 max-w-2xl text-body-sm text-on-surface-variant">
           Cada proyección se trabaja durante el mes anterior y se cierra el último día de ese mes
-          a las 7pm. Elige un periodo para verlo — los cerrados quedan como historial de solo
+          a las {cierreHoraLabel()}. Elige un periodo para verlo — los cerrados quedan como historial de solo
           lectura.
         </p>
 

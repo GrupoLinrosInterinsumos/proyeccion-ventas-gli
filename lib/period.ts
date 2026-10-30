@@ -48,9 +48,27 @@ export function currentProjectionPeriod(now = new Date()): string {
 }
 
 /**
+ * Hour (Lima time, 0–23) at which a projection closes on the last day of its working month.
+ * 19 by default; set the CIERRE_HORA environment variable (e.g. 13) to move it.
+ */
+export function cierreHora(): number {
+  const raw = process.env.CIERRE_HORA?.trim();
+  if (!raw) return 19;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n <= 23 ? n : 19;
+}
+
+/** The closing hour as shown to people: "7pm", "1pm", "10am". */
+export function cierreHoraLabel(): string {
+  const h = cierreHora();
+  return `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? "am" : "pm"}`;
+}
+
+/**
  * A projection period is worked on during the calendar month *before* it, closing the last
- * day of that month at 19:00 Lima time. E.g. October's projection is open all of September,
- * closing Sep 30 19:00 — November's opens immediately after.
+ * day of that month at `cierreHora()` Lima time (19:00 unless CIERRE_HORA says otherwise). E.g.
+ * October's projection is open all of September, closing Sep 30 19:00 — November's opens
+ * immediately after.
  */
 export function openProjectionPeriod(now = new Date()): string {
   const lima = limaNow(now);
@@ -61,7 +79,7 @@ export function openProjectionPeriod(now = new Date()): string {
 
   const nextDay = new Date(Date.UTC(y, m - 1, d + 1));
   const rolledIntoNextMonth = nextDay.getUTCMonth() !== m - 1;
-  const pastCutoff = rolledIntoNextMonth && h >= 19;
+  const pastCutoff = rolledIntoNextMonth && h >= cierreHora();
 
   const monthsAhead = pastCutoff ? 2 : 1;
   const { year, month } = addMonths(y, m, monthsAhead);
