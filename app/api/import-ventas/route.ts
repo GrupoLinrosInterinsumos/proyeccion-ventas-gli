@@ -14,6 +14,7 @@ import { importSalesFile } from "@/lib/run-import";
  * endpoint is disabled. (Writes data, so it uses its own token, separate from EXPORT_TOKEN.)
  */
 export const maxDuration = 300;
+const MAX_BYTES = 8_000_000;
 
 function tokenValido(req: NextRequest, esperado: string): boolean {
   const recibido = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
@@ -26,6 +27,17 @@ export async function POST(req: NextRequest) {
   const esperado = process.env.IMPORT_TOKEN;
   if (!esperado) return NextResponse.json({ error: "Importación automática no configurada" }, { status: 503 });
   if (!tokenValido(req, esperado)) return NextResponse.json({ error: "No autorizado" }, { status: 403 });
+
+  // The free hosting tier has little memory: a full year-to-date report (~20 MB) can take the whole
+  // service down while it is parsed. The daily job sends only the current month; refuse anything big
+  // before reading the body.
+  const size = Number(req.headers.get("content-length") ?? 0);
+  if (size > MAX_BYTES) {
+    return NextResponse.json(
+      { error: `Archivo demasiado grande (${(size / 1e6).toFixed(1)} MB; máximo ${MAX_BYTES / 1e6} MB). Sube solo el mes en curso.` },
+      { status: 413 }
+    );
+  }
 
   let file: FormDataEntryValue | null;
   try {
