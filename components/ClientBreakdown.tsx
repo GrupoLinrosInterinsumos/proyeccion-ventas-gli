@@ -8,6 +8,8 @@ import AddClientForm from "./AddClientForm";
 import { registerFlush, trackSave } from "@/lib/save-tracker";
 import SortButton, { nextSort, type SortDir } from "./SortButton";
 import UnitTag from "./UnitTag";
+import MonthlySparkline from "./MonthlySparkline";
+import { closedMonthsForPeriod } from "@/lib/period";
 import type { Unit } from "@/lib/units";
 
 type ClientSortKey = "promedio" | "proyeccion" | "total";
@@ -28,6 +30,7 @@ type Row = {
   alert_acknowledged: boolean;
   is_manual: boolean;
   editado: boolean;
+  serie: number[];
 };
 
 export default function ClientBreakdown({
@@ -51,6 +54,7 @@ export default function ClientBreakdown({
   const [addMode, setAddMode] = useState<"existente" | "nuevo" | null>(null);
   const [sort, setSort] = useState<{ key: ClientSortKey; dir: SortDir } | null>(null);
   const router = useRouter();
+  const chartMonths = useMemo(() => closedMonthsForPeriod(period), [period]);
 
   function load(showLoading = false) {
     if (showLoading) setRows(null);
@@ -133,6 +137,7 @@ export default function ClientBreakdown({
               <colgroup>
                 <col />
                 <col className="w-[104px]" />
+                <col className="w-[84px]" />
                 <col className="w-[172px]" />
                 <col className="w-[96px]" />
                 <col className="w-[104px]" />
@@ -150,6 +155,9 @@ export default function ClientBreakdown({
                       dir={sort?.dir ?? "desc"}
                       onClick={() => setSort((s) => nextSort(s, "promedio"))}
                     />
+                  </th>
+                  <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">
+                    Ventas
                   </th>
                   <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">
                     <SortButton
@@ -186,6 +194,7 @@ export default function ClientBreakdown({
                     period={period}
                     editable={editable}
                     unit={unit}
+                    months={chartMonths}
                     onSaved={reload}
                   />
                 ))}
@@ -198,6 +207,7 @@ export default function ClientBreakdown({
                       {formatQty(totals.promedio)}
                       <UnitTag unit={unit} />
                     </td>
+                    <td className="px-3 py-2" />
                     <td className="px-3 py-2 text-body-sm tabular-nums text-on-surface">
                       {formatQty(totals.proyeccion)}
                       <UnitTag unit={unit} />
@@ -242,6 +252,7 @@ function ClientRow({
   period,
   editable,
   unit,
+  months,
   onSaved,
 }: {
   row: Row;
@@ -251,6 +262,7 @@ function ClientRow({
   period: string;
   editable: boolean;
   unit: Unit;
+  months: string[];
   onSaved: () => void;
 }) {
   const [proyeccion, setProyeccion] = useState(row.proyeccion?.toString() ?? "");
@@ -366,6 +378,9 @@ function ClientRow({
           <UnitTag unit={unit} />
         </td>
         <td className="px-3 py-1.5">
+          <MonthlySparkline values={row.serie} months={months} unit={unit} />
+        </td>
+        <td className="px-3 py-1.5">
           <div className="flex items-center gap-1.5">
             {editable ? (
               <input
@@ -465,7 +480,7 @@ function ClientRow({
       </tr>
       {overThreshold && (
         <tr className="border-b border-outline-variant last:border-b-0 bg-error-container">
-          <td colSpan={6} className="px-3 py-2">
+          <td colSpan={7} className="px-3 py-2">
             <p className="text-body-sm text-on-error-container">
               <strong>{row.partner}</strong> supera el 100% de su promedio ({formatQty(row.promedio_mensual)} →{" "}
               {formatQty(proyeccionNum)}).

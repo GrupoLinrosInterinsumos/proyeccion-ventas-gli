@@ -16,6 +16,9 @@ export type ClientProjectionRow = {
   fijado_hasta: string | null;
   alert_acknowledged: boolean;
   is_manual: boolean;
+  /** Quantity sold per month over the closed months (oldest first, aligned with `closedMonthsForPeriod`)
+   * — for the peak-sales chart, same window as the product-level one. */
+  serie: number[];
 };
 
 /**
@@ -31,14 +34,21 @@ export async function getClientProjections(
 ): Promise<ClientProjectionRow[]> {
   const closed = closedMonthsForPeriod(period);
 
-  const avgRows = await query<{ partner: string; cantidad: number }>(
-    `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner,
+  const monthlyRows = await query<{ partner: string; period: string; cantidad: number }>(
+    `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner, period,
             SUM(cantidad) as cantidad
      FROM sales
      WHERE vendedor = $1 AND producto_ref = $2 AND period IN (${placeholders(closed.length, 3)})
-     GROUP BY partner`,
+     GROUP BY 1, period`,
     [vendedor, producto_ref, ...closed]
   );
+  const monthIndex = new Map(closed.map((m, i) => [m, i]));
+  const serieByPartner = new Map<string, number[]>();
+  for (const r of monthlyRows) {
+    const serie = serieByPartner.get(r.partner) ?? new Array<number>(closed.length).fill(0);
+    serie[monthIndex.get(r.period) ?? 0] = Number(r.cantidad);
+    serieByPartner.set(r.partner, serie);
+  }
 
   // Unit price per client (USD): always the "P. Unitario $" column from the import, weighted by
   // quantity over the lines that actually carry a price — never derived from revenue, which on
@@ -106,8 +116,8 @@ export async function getClientProjections(
   );
   const carryByPartner = new Map(carryRows.map((r) => [r.partner, r]));
 
-  const partners = new Set<string>([...avgRows.map((r) => r.partner), ...savedByPartner.keys()]);
-  const avgByPartner = new Map(avgRows.map((r) => [r.partner, Number(r.cantidad)]));
+  const partners = new Set<string>([...serieByPartner.keys(), ...savedByPartner.keys()]);
+  const avgByPartner = new Map([...serieByPartner].map(([p, serie]) => [p, serie.reduce((a, b) => a + b, 0)]));
   const denom = Math.max(closed.length, 1);
 
   const result: ClientProjectionRow[] = [];
@@ -156,6 +166,7 @@ export async function getClientProjections(
       fijado_hasta,
       alert_acknowledged: saved?.alert_acknowledged ?? false,
       is_manual: saved?.is_manual ?? promedio === 0,
+      serie: serieByPartner.get(partner) ?? [],
     });
   }
 
