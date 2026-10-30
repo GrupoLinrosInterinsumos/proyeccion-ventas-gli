@@ -137,6 +137,22 @@ CREATE TABLE IF NOT EXISTS comparison_notes (
   UNIQUE (period, vendedor, producto_ref, partner)
 );
 
+-- Distribución: low-stock products the admin is rationing among clients — how much each client gets
+-- and until which month (YYYY-MM, valid through the end of that month). One row per product + client.
+CREATE TABLE IF NOT EXISTS distribuciones (
+  id SERIAL PRIMARY KEY,
+  producto_ref TEXT NOT NULL,
+  producto_nombre TEXT NOT NULL,
+  partner TEXT NOT NULL,
+  cantidad DOUBLE PRECISION NOT NULL,
+  hasta_mes TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (producto_ref, partner)
+);
+
 -- Idempotent migrations for tables that already existed before these columns were added.
 ALTER TABLE imports ADD COLUMN IF NOT EXISTS data_hasta DATE;
 ALTER TABLE users ALTER COLUMN vendedor DROP NOT NULL;

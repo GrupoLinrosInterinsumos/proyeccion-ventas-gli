@@ -7,6 +7,7 @@ import { z } from "zod";
 import { query, queryOne } from "@/lib/db";
 import { createSessionCookie, clearSessionCookie, getSession, findUserByEmail } from "@/lib/auth";
 import { importSalesFile } from "@/lib/run-import";
+import { currentMonthPeriod } from "@/lib/comparison";
 import { openProjectionPeriod, periodStatus, closedMonthsForPeriod } from "@/lib/period";
 import { isRegion } from "@/lib/regions";
 import { generatePassword } from "@/lib/password";
@@ -670,4 +671,98 @@ export async function saveComparisonNoteAction(formData: FormData): Promise<Acti
   }
   revalidatePath("/comparacion");
   return { success: "Observación guardada." };
+}
+
+// ---------- Distribución de productos con poco stock (solo el administrador escribe)
+
+const MES_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+const distribucionSchema = z.object({
+  producto: z.string().trim().min(2, "Elige un producto de la lista."),
+  partner: z.string().trim().min(2, "Escribe el cliente."),
+  cantidad: z.string().trim().min(1, "Escribe la cantidad."),
+  hasta_mes: z.string().regex(MES_RE, "Elige hasta qué mes."),
+});
+
+export async function saveDistribucionAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session || !session.isAdmin) return { error: "Solo el administrador puede editar la distribución." };
+
+  const parsed = distribucionSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Datos inválidos." };
+  const data = parsed.data;
+
+  const cantidad = Number(data.cantidad.replace(/,/g, ""));
+  if (!Number.isFinite(cantidad) || cantidad <= 0) return { error: "La cantidad debe ser un número mayor que 0." };
+  if (data.hasta_mes < currentMonthPeriod()) return { error: "El mes no puede ser anterior al mes actual." };
+
+  // The product has to be one that exists in the catalog (picked by name or typed code).
+  const producto = await queryOne<{ producto_ref: string; producto_nombre: string }>(
+    `SELECT producto_ref, MAX(producto_nombre) AS producto_nombre FROM sales
+     WHERE UPPER(producto_ref) = UPPER($1) OR LOWER(producto_nombre) = LOWER($1)
+     GROUP BY producto_ref LIMIT 1`,
+    [data.producto.split(" · ")[0].trim()]
+  );
+  if (!producto) return { error: "No encontré ese producto. Escribe y elige uno de la lista." };
+
+  // A client that already exists keeps its canonical spelling; a new name is accepted as typed.
+  const cliente = await queryOne<{ partner: string }>(
+    `SELECT partner FROM (
+       SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') AS partner FROM sales
+     ) t WHERE LOWER(partner) = LOWER($1) LIMIT 1`,
+    [data.partner]
+  );
+  const partner = cliente?.partner ?? data.partner;
+
+  const existente = await queryOne<{ id: number }>(
+    `SELECT id FROM distribuciones WHERE producto_ref = $1 AND partner = $2`,
+    [producto.producto_ref, partner]
+  );
+  await query(
+    `INSERT INTO distribuciones (producto_ref, producto_nombre, partner, cantidad, hasta_mes, created_by, updated_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$6)
+     ON CONFLICT (producto_ref, partner) DO UPDATE SET
+       cantidad = excluded.cantidad, hasta_mes = excluded.hasta_mes,
+       producto_nombre = excluded.producto_nombre, updated_by = excluded.updated_by, updated_at = now()`,
+    [producto.producto_ref, producto.producto_nombre, partner, cantidad, data.hasta_mes, session.id]
+  );
+  revalidatePath("/distribucion");
+  return {
+    success: existente
+      ? `${partner} ya estaba en ${producto.producto_nombre}: se actualizó su cantidad y el mes.`
+      : "Distribución agregada.",
+  };
+}
+
+const updateDistribucionSchema = z.object({
+  id: z.string().regex(/^\d+$/, "Distribución inválida."),
+  cantidad: z.string().trim().min(1, "Escribe la cantidad."),
+  hasta_mes: z.string().regex(MES_RE, "Elige hasta qué mes."),
+});
+
+export async function updateDistribucionAction(formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session || !session.isAdmin) return { error: "Solo el administrador puede editar la distribución." };
+
+  const parsed = updateDistribucionSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Datos inválidos." };
+  const cantidad = Number(parsed.data.cantidad.replace(/,/g, ""));
+  if (!Number.isFinite(cantidad) || cantidad <= 0) return { error: "La cantidad debe ser un número mayor que 0." };
+
+  await query(
+    `UPDATE distribuciones SET cantidad = $1, hasta_mes = $2, updated_by = $3, updated_at = now() WHERE id = $4`,
+    [cantidad, parsed.data.hasta_mes, session.id, Number(parsed.data.id)]
+  );
+  revalidatePath("/distribucion");
+  return { success: "Guardado." };
+}
+
+export async function deleteDistribucionAction(formData: FormData): Promise<ActionState> {
+  const session = await getSession();
+  if (!session || !session.isAdmin) return { error: "Solo el administrador puede editar la distribución." };
+  const id = Number(formData.get("id"));
+  if (!id) return { error: "Distribución inválida." };
+  await query(`DELETE FROM distribuciones WHERE id = $1`, [id]);
+  revalidatePath("/distribucion");
+  return { success: "Eliminada." };
 }

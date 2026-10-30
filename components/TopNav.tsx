@@ -31,6 +31,7 @@ export default async function TopNav({
     }
   }
   links.push({ href: "/comparacion", label: "Comparación", badge: pendientes });
+  links.push({ href: "/distribucion", label: "Distribución" });
   if (session.isAdmin) {
     links.push({ href: "/importar", label: "Importar data" });
     links.push({ href: "/correcciones", label: "Correcciones" });
