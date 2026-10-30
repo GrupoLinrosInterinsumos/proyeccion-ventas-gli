@@ -153,6 +153,52 @@ CREATE TABLE IF NOT EXISTS distribuciones (
   UNIQUE (producto_ref, partner)
 );
 
+-- Clients the business treats as one: every name in "alias" is counted under "grupo" (imports, projections,
+-- comparison and exports). Rows are matched ignoring case and surrounding spaces.
+CREATE TABLE IF NOT EXISTS client_groups (
+  alias TEXT PRIMARY KEY,
+  grupo TEXT NOT NULL
+);
+INSERT INTO client_groups (alias, grupo) VALUES
+  ('ASOCIACION ORATORIO MAYOR DON BOSCO- MAMA ASHU', 'DON BOSCO'),
+  ('DIOCESIS DE HUARI', 'DON BOSCO')
+ON CONFLICT (alias) DO NOTHING;
+
+-- Fold data that was stored under an alias into its group. Idempotent: once no alias rows are left these
+-- statements match nothing.
+UPDATE sales SET partner = g.grupo FROM client_groups g WHERE UPPER(TRIM(sales.partner)) = UPPER(g.alias);
+
+INSERT INTO client_projections (period, vendedor, producto_ref, producto_nombre, partner, proyeccion_cantidad, precio,
+                                fijado_hasta, alert_acknowledged, updated_by, updated_at)
+SELECT cp.period, cp.vendedor, cp.producto_ref, MAX(cp.producto_nombre), g.grupo, SUM(cp.proyeccion_cantidad),
+       MAX(cp.precio), MAX(cp.fijado_hasta), BOOL_OR(cp.alert_acknowledged), MAX(cp.updated_by), MAX(cp.updated_at)
+FROM client_projections cp JOIN client_groups g ON UPPER(TRIM(cp.partner)) = UPPER(g.alias)
+GROUP BY cp.period, cp.vendedor, cp.producto_ref, g.grupo
+ON CONFLICT (period, vendedor, producto_ref, partner) DO UPDATE SET
+  proyeccion_cantidad = CASE WHEN client_projections.proyeccion_cantidad IS NULL AND excluded.proyeccion_cantidad IS NULL
+                             THEN NULL
+                             ELSE COALESCE(client_projections.proyeccion_cantidad, 0) + COALESCE(excluded.proyeccion_cantidad, 0) END,
+  precio = COALESCE(client_projections.precio, excluded.precio),
+  fijado_hasta = GREATEST(client_projections.fijado_hasta, excluded.fijado_hasta),
+  updated_by = COALESCE(client_projections.updated_by, excluded.updated_by);
+DELETE FROM client_projections cp USING client_groups g WHERE UPPER(TRIM(cp.partner)) = UPPER(g.alias);
+
+INSERT INTO comparison_notes (period, vendedor, producto_ref, partner, nota, updated_by, updated_at)
+SELECT n.period, n.vendedor, n.producto_ref, g.grupo, MAX(n.nota), MAX(n.updated_by), MAX(n.updated_at)
+FROM comparison_notes n JOIN client_groups g ON UPPER(TRIM(n.partner)) = UPPER(g.alias)
+GROUP BY n.period, n.vendedor, n.producto_ref, g.grupo
+ON CONFLICT (period, vendedor, producto_ref, partner) DO NOTHING;
+DELETE FROM comparison_notes n USING client_groups g WHERE UPPER(TRIM(n.partner)) = UPPER(g.alias);
+
+INSERT INTO distribuciones (producto_ref, producto_nombre, partner, cantidad, hasta_mes, created_by, updated_by)
+SELECT x.producto_ref, MAX(x.producto_nombre), g.grupo, SUM(x.cantidad), MAX(x.hasta_mes), MAX(x.created_by), MAX(x.updated_by)
+FROM distribuciones x JOIN client_groups g ON UPPER(TRIM(x.partner)) = UPPER(g.alias)
+GROUP BY x.producto_ref, g.grupo
+ON CONFLICT (producto_ref, partner) DO UPDATE SET
+  cantidad = distribuciones.cantidad + excluded.cantidad,
+  hasta_mes = GREATEST(distribuciones.hasta_mes, excluded.hasta_mes);
+DELETE FROM distribuciones d USING client_groups g WHERE UPPER(TRIM(d.partner)) = UPPER(g.alias);
+
 -- Idempotent migrations for tables that already existed before these columns were added.
 ALTER TABLE imports ADD COLUMN IF NOT EXISTS data_hasta DATE;
 ALTER TABLE users ALTER COLUMN vendedor DROP NOT NULL;

@@ -1,5 +1,6 @@
 import { withTransaction, BACKFILL_CATEGORIA_N2_SQL } from "./db";
 import type { AggregatedSaleRow, ParseResult } from "./import-excel";
+import { applyClientGroups, toGroupMap } from "./client-groups";
 
 const SALES_COLUMNS = [
   "period",
@@ -36,8 +37,12 @@ export async function commitImport(
       await q(`DELETE FROM sales WHERE period = $1`, [period]);
     }
 
-    for (let i = 0; i < parsed.rows.length; i += BATCH_SIZE) {
-      const chunk: AggregatedSaleRow[] = parsed.rows.slice(i, i + BATCH_SIZE);
+    // Clients the business treats as one are stored under their group name.
+    const groups = toGroupMap(await q<{ alias: string; grupo: string }>(`SELECT alias, grupo FROM client_groups`));
+    const rows = applyClientGroups(parsed.rows, groups);
+
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const chunk: AggregatedSaleRow[] = rows.slice(i, i + BATCH_SIZE);
       const values: unknown[] = [];
       const placeholders = chunk
         .map((row, rowIdx) => {
@@ -71,7 +76,7 @@ export async function commitImport(
     await q(`INSERT INTO imports (filename, periods_json, row_count, uploaded_by, data_hasta) VALUES ($1,$2,$3,$4,$5)`, [
       filename,
       JSON.stringify(parsed.periods),
-      parsed.rows.length,
+      rows.length,
       uploadedBy,
       parsed.hasta,
     ]);

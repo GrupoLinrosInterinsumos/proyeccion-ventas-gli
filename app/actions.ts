@@ -7,6 +7,7 @@ import { z } from "zod";
 import { query, queryOne } from "@/lib/db";
 import { createSessionCookie, clearSessionCookie, getSession, findUserByEmail } from "@/lib/auth";
 import { importSalesFile } from "@/lib/run-import";
+import { grupoDe, loadClientGroups } from "@/lib/client-groups";
 import { currentMonthPeriod } from "@/lib/comparison";
 import { openProjectionPeriod, periodStatus, closedMonthsForPeriod } from "@/lib/period";
 import { isRegion } from "@/lib/regions";
@@ -406,6 +407,7 @@ export async function saveClientProjectionAction(formData: FormData): Promise<Ac
 
   let partner = data.partner.trim();
   if (data.modo) {
+    partner = grupoDe(partner, await loadClientGroups());
     const existing = await queryOne<{ partner: string }>(
       `SELECT partner FROM (
          SELECT DISTINCT COALESCE(NULLIF(TRIM(partner), ''), '${SIN_CLIENTE}') AS partner FROM sales
@@ -712,7 +714,7 @@ export async function saveDistribucionAction(_prev: ActionState, formData: FormD
      ) t WHERE LOWER(partner) = LOWER($1) LIMIT 1`,
     [data.partner]
   );
-  const partner = cliente?.partner ?? data.partner;
+  const partner = cliente?.partner ?? grupoDe(data.partner, await loadClientGroups());
 
   const existente = await queryOne<{ id: number }>(
     `SELECT id FROM distribuciones WHERE producto_ref = $1 AND partner = $2`,
