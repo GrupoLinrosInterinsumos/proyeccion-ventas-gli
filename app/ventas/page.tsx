@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { getVendorProductTable, getFullCatalogProductTable, listCatalogProducts } from "@/lib/sales";
-import { openProjectionPeriod, closedMonthsForPeriod, periodLabel, periodStatus } from "@/lib/period";
+import { openProjectionPeriod, chartMonthsForPeriod, closedMonthsForPeriod, periodLabel, periodStatus } from "@/lib/period";
 import { REGION_LABELS } from "@/lib/regions";
 import { ensureOpenPeriodDefaults } from "@/lib/client-projections";
 import TopNav from "@/components/TopNav";
@@ -71,6 +71,7 @@ export default async function VentasPage({
             period={period}
             vendedor={session.vendedor}
             rows={rows}
+            chartMonths={chartMonthsForPeriod(period)}
             defaultOpen
             editable={editable}
             searchable={rows.length > 15}

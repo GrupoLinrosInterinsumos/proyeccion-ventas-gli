@@ -108,9 +108,29 @@ export function workingMonthDate(period: string): Date {
   return new Date(Date.UTC(year, month - 1, 15, 12));
 }
 
+/** Months the average is taken over. */
+export const PROMEDIO_MESES = 3;
+/** Months the sales charts show: the averaged ones plus the one before them, for context. */
+export const GRAFICO_MESES = 4;
+
+/**
+ * The date whose previous months make up the window of `period`: its working month, i.e. the average
+ * covers the months that had closed while the projection was open. A projection reopened after its working
+ * month ended (PERIODO_ABIERTO) uses today instead, so the months that closed in the meantime count.
+ */
+function windowReference(period: string, now = new Date()): Date {
+  const working = workingMonthDate(period);
+  return periodoReabierto() === period && limaNow(now) > limaNow(working) ? now : working;
+}
+
 /** The 3-closed-month average window that applied when `period` was open for editing. */
-export function closedMonthsForPeriod(period: string, count = 3): string[] {
-  return lastClosedMonths(count, workingMonthDate(period));
+export function closedMonthsForPeriod(period: string, count = PROMEDIO_MESES): string[] {
+  return lastClosedMonths(count, windowReference(period));
+}
+
+/** Months of the sales chart for `period`: the 4 latest closed months (the last 3 are the averaged ones). */
+export function chartMonthsForPeriod(period: string): string[] {
+  return closedMonthsForPeriod(period, GRAFICO_MESES);
 }
 
 export type PeriodStatus = "open" | "closed" | "future";

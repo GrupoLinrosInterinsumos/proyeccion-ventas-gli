@@ -14,7 +14,7 @@ import {
   type PeriodComparison,
 } from "@/lib/sales";
 import { searchVendedores, type UserListRow } from "@/lib/users";
-import { openProjectionPeriod, closedMonthsForPeriod, periodLabel, periodStatus } from "@/lib/period";
+import { openProjectionPeriod, chartMonthsForPeriod, closedMonthsForPeriod, periodLabel, periodStatus } from "@/lib/period";
 import { isRegion, REGION_LABELS, type Region } from "@/lib/regions";
 import { formatQty, formatQtySplit, formatUsdCompact } from "@/lib/format";
 import { qtyDelta } from "@/lib/units";
@@ -194,7 +194,15 @@ async function VendorDrilldown({ vendedor, period, isOwn }: { vendedor: string; 
           </p>
         </div>
       ) : (
-        <VendorSection period={period} vendedor={vendedor} rows={rows} defaultOpen editable={false} searchable={rows.length > 15} />
+        <VendorSection
+          period={period}
+          vendedor={vendedor}
+          rows={rows}
+          chartMonths={chartMonthsForPeriod(period)}
+          defaultOpen
+          editable={false}
+          searchable={rows.length > 15}
+        />
       )}
       <p className="mt-3 text-body-sm text-on-surface-variant">
         {isOwn

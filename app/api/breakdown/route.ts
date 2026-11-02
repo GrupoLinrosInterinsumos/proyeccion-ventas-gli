@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { getClientProjections } from "@/lib/client-projections";
+import { chartMonthsForPeriod } from "@/lib/period";
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
@@ -18,5 +19,6 @@ export async function GET(req: NextRequest) {
   }
 
   const rows = await getClientProjections(vendedor, producto_ref, period);
-  return NextResponse.json({ rows });
+  // The chart months come from the server: PERIODO_ABIERTO can shift them and the browser cannot see it.
+  return NextResponse.json({ rows, months: chartMonthsForPeriod(period) });
 }

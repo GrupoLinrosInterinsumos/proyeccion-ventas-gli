@@ -9,7 +9,7 @@ import { registerFlush, trackSave } from "@/lib/save-tracker";
 import SortButton, { nextSort, type SortDir } from "./SortButton";
 import UnitTag from "./UnitTag";
 import MonthlySparkline from "./MonthlySparkline";
-import { closedMonthsForPeriod } from "@/lib/period";
+import { PROMEDIO_MESES } from "@/lib/period";
 import type { Unit } from "@/lib/units";
 
 type ClientSortKey = "promedio" | "proyeccion" | "total";
@@ -49,12 +49,12 @@ export default function ClientBreakdown({
   unit?: Unit;
 }) {
   const [rows, setRows] = useState<Row[] | null>(null);
+  const [chartMonths, setChartMonths] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   // "existente": pick a client already in the system; "nuevo": create one that isn't there yet.
   const [addMode, setAddMode] = useState<"existente" | "nuevo" | null>(null);
   const [sort, setSort] = useState<{ key: ClientSortKey; dir: SortDir } | null>(null);
   const router = useRouter();
-  const chartMonths = useMemo(() => closedMonthsForPeriod(period), [period]);
 
   function load(showLoading = false) {
     if (showLoading) setRows(null);
@@ -63,7 +63,10 @@ export default function ClientBreakdown({
       .then((r) => r.json())
       .then((data) => {
         if (data.error) setError(data.error);
-        else setRows(data.rows);
+        else {
+          setRows(data.rows);
+          setChartMonths(data.months ?? []);
+        }
       })
       .catch(() => setError("No se pudo cargar."));
   }
@@ -103,7 +106,7 @@ export default function ClientBreakdown({
     <div className="bg-surface-container-low px-4 py-3">
       <div className="mb-2 flex items-center justify-between">
         <p className="text-label-md uppercase tracking-wide text-on-surface-variant">
-          Clientes &middot; últimos 3 meses cerrados
+          Clientes &middot; promedio de los últimos 3 meses cerrados
         </p>
         {editable && !addMode && (
           <div className="flex items-center gap-1">
@@ -137,7 +140,7 @@ export default function ClientBreakdown({
               <colgroup>
                 <col />
                 <col className="w-[104px]" />
-                <col className="w-[84px]" />
+                <col className="w-[100px]" />
                 <col className="w-[172px]" />
                 <col className="w-[96px]" />
                 <col className="w-[104px]" />
@@ -157,7 +160,7 @@ export default function ClientBreakdown({
                     />
                   </th>
                   <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">
-                    Ventas
+                    Ventas 4m
                   </th>
                   <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">
                     <SortButton
@@ -378,7 +381,7 @@ function ClientRow({
           <UnitTag unit={unit} />
         </td>
         <td className="px-3 py-1.5">
-          <MonthlySparkline values={row.serie} months={months} unit={unit} />
+          <MonthlySparkline values={row.serie} months={months} unit={unit} averaged={PROMEDIO_MESES} />
         </td>
         <td className="px-3 py-1.5">
           <div className="flex items-center gap-1.5">

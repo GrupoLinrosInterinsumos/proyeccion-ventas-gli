@@ -8,18 +8,21 @@ const CHART_HEIGHT = 24;
 const LABEL_HEIGHT = 11;
 
 /**
- * Tiny bar chart of the monthly sales that feed the 3-month average, to spot a peak at a glance:
- * the single highest month is red. Month initials sit under the bars; hover a bar for the month
- * and the exact quantity.
+ * Tiny bar chart of the monthly sales, to spot a peak at a glance: the single highest month is red.
+ * The last `averaged` bars are the months the average is taken over; the ones before are only context
+ * and drawn fainter. Month initials sit under the bars; hover a bar for the month and the exact quantity.
  */
 export default function MonthlySparkline({
   values,
   months,
   unit,
+  averaged,
 }: {
   values: number[];
   months: string[];
   unit: Unit;
+  /** How many of the last bars feed the average (the rest are drawn fainter); all of them when omitted. */
+  averaged?: number;
 }) {
   const max = Math.max(0, ...values);
   if (values.length === 0 || max <= 0) {
@@ -35,13 +38,14 @@ export default function MonthlySparkline({
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       role="img"
-      aria-label="Ventas de cada uno de los últimos 3 meses"
+      aria-label={`Ventas de cada uno de los últimos ${values.length} meses`}
       className="block"
     >
       {values.map((v, i) => {
         const h = v > 0 ? Math.max(2, (v / max) * (CHART_HEIGHT - 2)) : 1;
         const x = i * (BAR + GAP);
         const month = months[i] ? periodLabel(months[i]) : "";
+        const fuera = averaged !== undefined && i < values.length - averaged;
         return (
           <g key={months[i] ?? i}>
             <rect
@@ -50,9 +54,9 @@ export default function MonthlySparkline({
               width={BAR}
               height={h}
               rx={1.5}
-              className={i === peak ? "fill-secondary" : "fill-primary"}
+              className={`${i === peak ? "fill-secondary" : "fill-primary"} ${fuera ? "opacity-40" : ""}`}
             >
-              <title>{`${month}: ${formatQty(v)} ${unit}${i === peak ? " (pico)" : ""}`}</title>
+              <title>{`${month}: ${formatQty(v)} ${unit}${i === peak ? " (pico)" : ""}${fuera ? " · fuera del promedio" : ""}`}</title>
             </rect>
             <text
               x={x + BAR / 2}

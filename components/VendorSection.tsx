@@ -14,11 +14,7 @@ import UnitTag from "./UnitTag";
 import MonthlySparkline from "./MonthlySparkline";
 import SaveAllButton from "./SaveAllButton";
 import { addQty, emptyQty, unitForCategoria } from "@/lib/units";
-import { closedMonthsForPeriod } from "@/lib/period";
-
-// Months shown in the peak-sales chart — keep in sync with SERIES_MONTHS in lib/sales.ts (that
-// module is server-only, so it can't be imported here).
-const CHART_MONTHS = 3;
+import { PROMEDIO_MESES } from "@/lib/period";
 
 type ProductSortKey = "promedio" | "proyeccion" | "ingreso";
 
@@ -47,6 +43,7 @@ export default function VendorSection({
   editable = true,
   searchable = false,
   catalog = [],
+  chartMonths,
 }: {
   period: string;
   vendedor: string;
@@ -55,6 +52,8 @@ export default function VendorSection({
   editable?: boolean;
   searchable?: boolean;
   catalog?: CatalogProduct[];
+  /** Months of the sales chart (oldest first), worked out by the server — see chartMonthsForPeriod. */
+  chartMonths: string[];
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -104,8 +103,6 @@ export default function VendorSection({
       pendientes: rows.filter((r) => r.proyeccion === null).length,
     };
   }, [rows]);
-
-  const chartMonths = useMemo(() => closedMonthsForPeriod(period, CHART_MONTHS), [period]);
 
   const categoriaOptions = useMemo(
     () => [...new Set(rows.map((r) => r.categoria_n2).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b, "es")),
@@ -273,9 +270,9 @@ export default function VendorSection({
                   </th>
                   <th
                     className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant"
-                    title="Ventas de cada uno de los 3 meses del promedio. Barra roja: el mes pico."
+                    title="Ventas de los últimos 4 meses cerrados; el promedio usa los 3 más recientes (la primera barra es solo contexto). Barra roja: el mes pico."
                   >
-                    Ventas 3m
+                    Ventas 4m
                   </th>
                   <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">
                     <div className="flex items-center gap-3">
@@ -358,6 +355,7 @@ export default function VendorSection({
                             values={row.serie}
                             months={chartMonths}
                             unit={unitForCategoria(row.categoria_n2)}
+                            averaged={PROMEDIO_MESES}
                           />
                         </td>
                         {editable ? (

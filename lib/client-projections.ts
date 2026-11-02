@@ -1,5 +1,5 @@
 import { query, queryOne } from "./db";
-import { closedMonthsForPeriod, periodStatus } from "./period";
+import { chartMonthsForPeriod, closedMonthsForPeriod, periodStatus } from "./period";
 
 function placeholders(count: number, start = 1): string {
   return Array.from({ length: count }, (_, i) => `$${start + i}`).join(",");
@@ -16,7 +16,7 @@ export type ClientProjectionRow = {
   fijado_hasta: string | null;
   alert_acknowledged: boolean;
   is_manual: boolean;
-  /** Quantity sold per month over the closed months (oldest first, aligned with `closedMonthsForPeriod`)
+  /** Quantity sold per month over the chart months (oldest first, aligned with `chartMonthsForPeriod`)
    * — for the peak-sales chart, same window as the product-level one. */
   serie: number[];
 };
@@ -33,19 +33,20 @@ export async function getClientProjections(
   period: string
 ): Promise<ClientProjectionRow[]> {
   const closed = closedMonthsForPeriod(period);
+  const chart = chartMonthsForPeriod(period);
 
   const monthlyRows = await query<{ partner: string; period: string; cantidad: number }>(
     `SELECT COALESCE(NULLIF(TRIM(partner), ''), 'Sin cliente registrado') as partner, period,
             SUM(cantidad) as cantidad
      FROM sales
-     WHERE vendedor = $1 AND producto_ref = $2 AND period IN (${placeholders(closed.length, 3)})
+     WHERE vendedor = $1 AND producto_ref = $2 AND period IN (${placeholders(chart.length, 3)})
      GROUP BY 1, period`,
-    [vendedor, producto_ref, ...closed]
+    [vendedor, producto_ref, ...chart]
   );
-  const monthIndex = new Map(closed.map((m, i) => [m, i]));
+  const monthIndex = new Map(chart.map((m, i) => [m, i]));
   const serieByPartner = new Map<string, number[]>();
   for (const r of monthlyRows) {
-    const serie = serieByPartner.get(r.partner) ?? new Array<number>(closed.length).fill(0);
+    const serie = serieByPartner.get(r.partner) ?? new Array<number>(chart.length).fill(0);
     serie[monthIndex.get(r.period) ?? 0] = Number(r.cantidad);
     serieByPartner.set(r.partner, serie);
   }
@@ -117,7 +118,10 @@ export async function getClientProjections(
   const carryByPartner = new Map(carryRows.map((r) => [r.partner, r]));
 
   const partners = new Set<string>([...serieByPartner.keys(), ...savedByPartner.keys()]);
-  const avgByPartner = new Map([...serieByPartner].map(([p, serie]) => [p, serie.reduce((a, b) => a + b, 0)]));
+  // The average covers the last months of the chart window (the first bar is only there for context).
+  const avgByPartner = new Map(
+    [...serieByPartner].map(([p, serie]) => [p, serie.slice(-closed.length).reduce((a, b) => a + b, 0)])
+  );
   const denom = Math.max(closed.length, 1);
 
   const result: ClientProjectionRow[] = [];

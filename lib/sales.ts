@@ -1,5 +1,5 @@
 import { query, queryOne } from "./db";
-import { closedMonthsForPeriod, periodStatus } from "./period";
+import { chartMonthsForPeriod, closedMonthsForPeriod, periodStatus } from "./period";
 import { productFamilyKey, parseSizeGrams } from "./product-family";
 import { refreshUntouchedPrices } from "./client-projections";
 import { saccoCondition, isExcedido, unitForCategoria, emptyQty, addQty, type QtySplit, type Unit } from "./units";
@@ -40,18 +40,16 @@ export type ProductRow = {
   is_manual: boolean;
   /** Where the vendedor says they are with this product: null = not opened yet (no color). */
   estado_usuario: ProductStatus | null;
-  /** Quantity sold per month over the 3 closed months ending at the last closed month (oldest first,
-   * aligned with `closedMonthsForPeriod(period, SERIES_MONTHS)`) — for the peak-sales chart. */
+  /** Quantity sold per month over the 4 closed months ending at the last closed month (oldest first,
+   * aligned with `chartMonthsForPeriod(period)`) — for the peak-sales chart. */
   serie: number[];
 };
 
 export type ProductStatus = "en_proceso" | "terminado";
 
-export const SERIES_MONTHS = 3;
-
 /** Per producto_ref: monthly quantity sold by this vendedor over the chart window. */
 async function monthlySeriesByProduct(period: string, vendedor: string): Promise<Map<string, number[]>> {
-  const months = closedMonthsForPeriod(period, SERIES_MONTHS);
+  const months = chartMonthsForPeriod(period);
   const rows = await query<{ producto_ref: string; period: string; qty: number }>(
     `SELECT producto_ref, period, SUM(cantidad) AS qty
      FROM sales
