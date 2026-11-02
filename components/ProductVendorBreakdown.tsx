@@ -41,12 +41,12 @@ export default function ProductVendorBreakdown({
     };
   }, [producto_ref, period, region]);
 
-  const max = Math.max(...(rows?.map((r) => r.promedio_mensual) ?? []), 1);
+  const max = Math.max(...(rows?.map((r) => r.proyeccion ?? 0) ?? []), 1);
 
   return (
     <div className="bg-surface-container-low px-4 py-3">
       <p className="mb-2 text-label-md uppercase tracking-wide text-on-surface-variant">
-        Vendedores que lo venden &middot; últimos 3 meses cerrados
+        Vendedores &middot; proyección del mes y promedio de los últimos 3 meses cerrados
       </p>
       {error && <p className="text-body-sm text-secondary">{error}</p>}
       {!rows && !error && <p className="text-body-sm text-on-surface-variant">Cargando…</p>}
@@ -56,7 +56,7 @@ export default function ProductVendorBreakdown({
       {rows && rows.length > 0 && (
         <ul className="flex flex-col divide-y divide-outline-variant overflow-hidden rounded-md border border-outline-variant bg-surface-container-lowest">
           {rows.map((r) => {
-            const pct = max > 0 ? (r.promedio_mensual / max) * 100 : 0;
+            const pct = max > 0 ? ((r.proyeccion ?? 0) / max) * 100 : 0;
             const delta =
               r.proyeccion !== null && r.promedio_mensual > 0
                 ? ((r.proyeccion - r.promedio_mensual) / r.promedio_mensual) * 100
@@ -87,13 +87,16 @@ export default function ProductVendorBreakdown({
                   <span className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-surface-container-highest">
                     <span className="block h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
                   </span>
-                  <span className="w-20 shrink-0 text-right text-body-sm font-medium tabular-nums text-on-surface">
-                    {formatQty(r.promedio_mensual)}
-                    <UnitTag unit={unit} />
-                  </span>
-                  <span className="w-24 shrink-0 text-right text-body-sm tabular-nums text-on-surface-variant">
+                  <span className="w-24 shrink-0 text-right text-body-sm font-medium tabular-nums text-on-surface">
                     {r.proyeccion !== null ? formatQty(r.proyeccion) : "—"}
                     {r.proyeccion !== null && <UnitTag unit={unit} />}
+                  </span>
+                  <span
+                    className="w-28 shrink-0 text-right text-label-sm tabular-nums text-on-surface-variant"
+                    title="Promedio mensual de los últimos 3 meses cerrados"
+                  >
+                    Prom. {formatQty(r.promedio_mensual)}
+                    <UnitTag unit={unit} />
                   </span>
                   {delta !== null ? (
                     <span

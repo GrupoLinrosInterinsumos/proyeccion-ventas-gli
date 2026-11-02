@@ -1,12 +1,12 @@
 "use client";
 
 import { Fragment, useState } from "react";
-import { formatQty } from "@/lib/format";
+import { formatQty, formatQtySplit } from "@/lib/format";
 import type { ProductBreakdownRow } from "@/lib/sales";
 import type { Region } from "@/lib/regions";
 import ProductVendorBreakdown from "./ProductVendorBreakdown";
 import UnitTag from "./UnitTag";
-import { unitForCategoria } from "@/lib/units";
+import { addQty, emptyQty, unitForCategoria } from "@/lib/units";
 
 export default function ProductBreakdownCard({
   products,
@@ -20,13 +20,29 @@ export default function ProductBreakdownCard({
   title?: string;
 }) {
   const [expanded, setExpanded] = useState<string | null>(null);
-  const max = Math.max(...products.map((p) => p.promedio_mensual), 1);
+  // The list is about what was projected: the bar and the headline number are the projection; the
+  // 3-month average stays as the reference next to it.
+  const max = Math.max(...products.map((p) => p.proyeccion ?? 0), 1);
+  const totalProyectado = emptyQty();
+  const totalPromedio = emptyQty();
+  for (const p of products) {
+    const unit = unitForCategoria(p.categoria_n2);
+    addQty(totalProyectado, unit, p.proyeccion ?? 0);
+    addQty(totalPromedio, unit, p.promedio_mensual);
+  }
 
   return (
     <section className="rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]">
       <h2 className="flex items-center gap-2.5 border-b border-outline-variant px-5 py-3.5 text-body-lg font-semibold text-on-surface">
         <span className="h-2 w-2 rounded-full bg-tertiary" aria-hidden />
         {title}
+        {products.length > 0 && (
+          <span className="ml-auto text-right text-body-sm font-normal text-on-surface-variant">
+            Proyectado ({products.length} listado{products.length === 1 ? "" : "s"}):{" "}
+            <span className="font-semibold tabular-nums text-on-surface">{formatQtySplit(totalProyectado)}</span>
+            <span className="block text-label-sm">Promedio 3m: {formatQtySplit(totalPromedio)}</span>
+          </span>
+        )}
       </h2>
       {products.length === 0 ? (
         <p className="px-5 py-6 text-body-sm text-on-surface-variant">Sin datos para este filtro.</p>
@@ -64,7 +80,17 @@ export default function ProductBreakdownCard({
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-body-sm font-semibold tabular-nums text-on-surface">
-                        {formatQty(p.promedio_mensual)}
+                        {p.proyeccion !== null ? (
+                          <>
+                            {formatQty(p.proyeccion)}
+                            <UnitTag unit={unitForCategoria(p.categoria_n2)} />
+                          </>
+                        ) : (
+                          <span className="font-normal text-on-surface-variant">Sin proyectar</span>
+                        )}
+                      </p>
+                      <p className="text-label-sm tabular-nums text-on-surface-variant">
+                        Prom. {formatQty(p.promedio_mensual)}
                         <UnitTag unit={unitForCategoria(p.categoria_n2)} />
                       </p>
                     </div>
@@ -72,7 +98,7 @@ export default function ProductBreakdownCard({
                   <span className="block h-1.5 overflow-hidden rounded-full bg-surface-container-highest">
                     <span
                       className="block h-full rounded-full bg-tertiary"
-                      style={{ width: `${(p.promedio_mensual / max) * 100}%` }}
+                      style={{ width: `${((p.proyeccion ?? 0) / max) * 100}%` }}
                     />
                   </span>
                 </li>

@@ -368,13 +368,14 @@ export async function getProductVendorBreakdown(
   );
   const projByVendedor = new Map(projRows.map((p) => [p.vendedor, p.proyeccion]));
 
-  return salesRows.map((r) => ({
-    vendedor: r.vendedor,
-    region: r.region,
-    promedio_mensual: Number(r.total) / denom,
-    proyeccion:
-      projByVendedor.get(r.vendedor) != null ? Number(projByVendedor.get(r.vendedor)) : null,
-  }));
+  return salesRows
+    .map((r) => ({
+      vendedor: r.vendedor,
+      region: r.region,
+      promedio_mensual: Number(r.total) / denom,
+      proyeccion: projByVendedor.get(r.vendedor) != null ? Number(projByVendedor.get(r.vendedor)) : null,
+    }))
+    .sort((a, b) => (b.proyeccion ?? 0) - (a.proyeccion ?? 0) || b.promedio_mensual - a.promedio_mensual);
 }
 
 export type DashboardFilters = { region?: Region; vendedor?: string; q?: string; categoriaN2?: string };
@@ -405,6 +406,10 @@ function salesScope(periods: string[], filters: DashboardFilters): Scope {
     where.push(`categoria_n2 = $${params.length + 1}`);
     params.push(filters.categoriaN2);
   }
+  if (filters.q) {
+    where.push(`(producto_nombre ILIKE $${params.length + 1} OR producto_ref ILIKE $${params.length + 1})`);
+    params.push(`%${filters.q}%`);
+  }
   return { where, params };
 }
 
@@ -425,6 +430,13 @@ function projScope(period: string, filters: DashboardFilters): Scope {
       `producto_ref IN (SELECT DISTINCT producto_ref FROM sales WHERE categoria_n2 = $${params.length + 1})`
     );
     params.push(filters.categoriaN2);
+  }
+  if (filters.q) {
+    where.push(
+      `producto_ref IN (SELECT DISTINCT producto_ref FROM sales
+                        WHERE producto_nombre ILIKE $${params.length + 1} OR producto_ref ILIKE $${params.length + 1})`
+    );
+    params.push(`%${filters.q}%`);
   }
   return { where, params };
 }
@@ -617,13 +629,15 @@ export type ProductBreakdownRow = {
   marca: string | null;
   cantidad_total: number;
   promedio_mensual: number;
+  /** What the vendedores projected for the period, summed over the family; null when none has projected it. */
+  proyeccion: number | null;
   vendedores: number;
   /** Names of the vendedores selling it, alphabetically. */
   vendedor_nombres: string[];
 };
 
 /**
- * Ranked product table (desc by 3-month avg qty), optionally scoped by region/vendedor/search
+ * Ranked product table (desc by projected qty, then by 3-month sales), optionally scoped by region/vendedor/search
  * text/categoria_n2. Package-size variants of the same item (e.g. ACEK1-061-001/005/025) are
  * summed into one row here — dashboard-only, /ventas keeps them separate.
  */
@@ -700,6 +714,24 @@ export async function getProductBreakdown(
     families.set(key, fam);
   }
 
+  // What was projected for the period, per family: every vendedor in scope, whether or not they sold the
+  // product in the closed months.
+  const proyeccionPorFamilia = new Map<string, number>();
+  const vendedoresEnAlcance = [...new Set(rows.map((r) => r.vendedor))];
+  if (vendedoresEnAlcance.length > 0) {
+    const projRows = await query<{ producto_ref: string; proyeccion: number }>(
+      `SELECT producto_ref, SUM(proyeccion) AS proyeccion
+       FROM projections
+       WHERE period = $1 AND proyeccion IS NOT NULL AND vendedor = ANY($2::text[])
+       GROUP BY producto_ref`,
+      [period, vendedoresEnAlcance]
+    );
+    for (const p of projRows) {
+      const key = productFamilyKey(p.producto_ref);
+      if (families.has(key)) proyeccionPorFamilia.set(key, (proyeccionPorFamilia.get(key) ?? 0) + Number(p.proyeccion));
+    }
+  }
+
   const result: ProductBreakdownRow[] = [];
   for (const fam of families.values()) {
     let bestRef = "";
@@ -724,10 +756,11 @@ export async function getProductBreakdown(
       vendedores: fam.vendedores.size,
       vendedor_nombres: [...fam.vendedores].sort((a, b) => a.localeCompare(b, "es")),
       promedio_mensual: fam.total / denom,
+      proyeccion: proyeccionPorFamilia.get(fam.key) ?? null,
     });
   }
 
-  result.sort((a, b) => b.cantidad_total - a.cantidad_total);
+  result.sort((a, b) => (b.proyeccion ?? 0) - (a.proyeccion ?? 0) || b.cantidad_total - a.cantidad_total);
   return result.slice(0, limit);
 }
 

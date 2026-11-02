@@ -59,6 +59,8 @@ export default async function DashboardPage({
     region: region || undefined,
     vendedor: vendedor || undefined,
     categoriaN2: categoriaN2 || undefined,
+    // The cards above follow the search too, so they add up what the list below shows.
+    q: q || undefined,
   };
   // Totals must include every vendedor's default projection, not only the ones whose page happens
   // to have been opened — make sure they all exist first.
