@@ -15,19 +15,22 @@ import type { CatalogProduct } from "@/lib/sales";
 import UnitTag from "./UnitTag";
 
 type Mes = { value: string; label: string };
-type Estado = "Vigente" | "Último mes" | "Vencida";
+type Estado = "Vigente" | "Programada" | "Vencida";
 
 const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
-function estadoDe(hasta: string, mesActual: string): Estado {
-  return hasta > mesActual ? "Vigente" : hasta === mesActual ? "Último mes" : "Vencida";
+/** This month's distribution is "Vigente", a later month's is "Programada", an earlier one's is "Vencida". */
+function estadoDe(mes: string, mesActual: string): Estado {
+  return mes === mesActual ? "Vigente" : mes > mesActual ? "Programada" : "Vencida";
 }
 
 const TAG: Record<Estado, string> = {
   Vigente: "bg-edited text-[#1b5e2f]",
-  "Último mes": "bg-progress text-[#7a4b00]",
+  Programada: "bg-progress text-[#7a4b00]",
   Vencida: "bg-surface-container-high text-on-surface-variant",
 };
+
+const TODOS = "todos";
 
 const inputClass =
   "rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20";
@@ -48,25 +51,61 @@ export default function DistribucionView({
   const [search, setSearch] = useState("");
   const [verVencidas, setVerVencidas] = useState(false);
   const [adding, setAdding] = useState(false);
+  // Which month is shown: this one when it has distributions, otherwise all of them.
+  const [mesFiltro, setMesFiltro] = useState<string>(() =>
+    rows.some((r) => r.mes === mesActual) ? mesActual : TODOS
+  );
+  // Products start folded; a click on the header opens the list of clients.
+  const [abiertos, setAbiertos] = useState<Set<string>>(() => new Set());
 
   const term = norm(search.trim());
-  const vencidas = rows.filter((r) => estadoDe(r.hasta_mes, mesActual) === "Vencida").length;
+  const vencidas = rows.filter((r) => estadoDe(r.mes, mesActual) === "Vencida").length;
+
+  // Month chips: every month that has distributions (past ones only when "Mostrar vencidas" is on).
+  const chips = useMemo(() => {
+    const cuenta = new Map<string, number>();
+    for (const r of rows) {
+      if (!verVencidas && estadoDe(r.mes, mesActual) === "Vencida") continue;
+      cuenta.set(r.mes, (cuenta.get(r.mes) ?? 0) + 1);
+    }
+    return [...cuenta].sort(([a], [b]) => a.localeCompare(b)).map(([mes, n]) => ({ mes, n }));
+  }, [rows, verVencidas, mesActual]);
+  const filtroActivo = mesFiltro === TODOS || chips.some((c) => c.mes === mesFiltro) ? mesFiltro : TODOS;
 
   const grupos = useMemo(() => {
     const map = new Map<string, { ref: string; nombre: string; unidad: Distribucion["unidad"]; items: Distribucion[] }>();
     for (const r of rows) {
-      if (!verVencidas && estadoDe(r.hasta_mes, mesActual) === "Vencida") continue;
+      if (!verVencidas && estadoDe(r.mes, mesActual) === "Vencida") continue;
+      if (filtroActivo !== TODOS && r.mes !== filtroActivo) continue;
       if (term && !(norm(r.producto_nombre).includes(term) || norm(r.producto_ref).includes(term) || norm(r.partner).includes(term))) continue;
       const g = map.get(r.producto_ref) ?? { ref: r.producto_ref, nombre: r.producto_nombre, unidad: r.unidad, items: [] };
       g.items.push(r);
       map.set(r.producto_ref, g);
     }
     const total = (items: Distribucion[]) =>
-      items.filter((i) => estadoDe(i.hasta_mes, mesActual) !== "Vencida").reduce((s, i) => s + i.cantidad, 0);
+      items.filter((i) => estadoDe(i.mes, mesActual) !== "Vencida").reduce((s, i) => s + i.cantidad, 0);
     return [...map.values()]
-      .map((g) => ({ ...g, items: [...g.items].sort((a, b) => b.cantidad - a.cantidad), total: total(g.items) }))
+      .map((g) => ({
+        ...g,
+        items: [...g.items].sort((a, b) => a.mes.localeCompare(b.mes) || b.cantidad - a.cantidad),
+        total: total(g.items),
+      }))
       .sort((a, b) => b.total - a.total || a.nombre.localeCompare(b.nombre, "es"));
-  }, [rows, term, verVencidas, mesActual]);
+  }, [rows, term, verVencidas, mesActual, filtroActivo]);
+
+  // Searching opens what matches, so the client you looked for is not hidden behind a fold.
+  useEffect(() => {
+    if (term) setAbiertos(new Set(grupos.map((g) => g.ref)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [term]);
+
+  function alternar(ref: string) {
+    setAbiertos((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(ref)) next.add(ref);
+      return next;
+    });
+  }
 
   return (
     <div>
@@ -94,8 +133,42 @@ export default function DistribucionView({
         )}
       </div>
 
+      {chips.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-1.5" role="group" aria-label="Mes">
+          <span className="mr-1 text-label-md uppercase tracking-wide text-on-surface-variant">Mes</span>
+          {[{ mes: TODOS, n: rows.length - (verVencidas ? 0 : vencidas) }, ...chips].map((c) => {
+            const activo = filtroActivo === c.mes;
+            return (
+              <button
+                key={c.mes}
+                type="button"
+                onClick={() => setMesFiltro(c.mes)}
+                aria-pressed={activo}
+                className={`rounded-full border px-3 py-1 text-body-sm transition-colors ${
+                  activo
+                    ? "border-primary bg-primary text-on-primary"
+                    : "border-outline-variant bg-surface-container-lowest text-on-surface hover:border-primary hover:text-primary"
+                }`}
+              >
+                {c.mes === TODOS ? "Todos" : periodLabel(c.mes)}
+                <span className={`ml-1.5 text-label-sm ${activo ? "opacity-80" : "text-on-surface-variant"}`}>{c.n}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {isAdmin && adding && (
-        <AddDistribucion meses={meses} catalog={catalog} onClose={() => setAdding(false)} />
+        <AddDistribucion
+          meses={meses}
+          catalog={catalog}
+          mesInicial={filtroActivo === TODOS ? "" : filtroActivo}
+          onSaved={(mes, ref) => {
+            setMesFiltro(mes);
+            if (ref) setAbiertos((prev) => new Set(prev).add(ref));
+          }}
+          onClose={() => setAdding(false)}
+        />
       )}
 
       {grupos.length === 0 ? (
@@ -108,52 +181,74 @@ export default function DistribucionView({
         </div>
       ) : (
         <div className="flex flex-col gap-3">
-          {grupos.map((g) => (
-            <section
-              key={g.ref}
-              className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                <div className="min-w-0">
-                  <h3 className="break-words text-body-lg font-semibold text-on-surface">{g.nombre}</h3>
-                  <p className="text-label-sm text-on-surface-variant">{g.ref}</p>
-                </div>
-                <div className="flex items-center gap-6">
-                  <div className="text-right">
-                    <p className="text-label-sm uppercase tracking-wide text-on-surface-variant">Clientes</p>
-                    <p className="text-body-md font-semibold tabular-nums text-on-surface">{g.items.length}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-label-sm uppercase tracking-wide text-on-surface-variant">Distribuyendo</p>
-                    <p className="text-body-md font-semibold tabular-nums text-primary">
-                      {formatQty(g.total)}
-                      <UnitTag unit={g.unidad} />
+          {grupos.map((g) => {
+            const abierto = abiertos.has(g.ref);
+            return (
+              <section
+                key={g.ref}
+                className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm shadow-black/[0.04]"
+              >
+                <h3 className="m-0">
+                  <button
+                    type="button"
+                    onClick={() => alternar(g.ref)}
+                    aria-expanded={abierto}
+                    className="flex w-full flex-wrap items-center justify-between gap-3 px-4 py-3 text-left hover:bg-surface-container-low"
+                  >
+                    <div className="flex min-w-0 items-start gap-2">
+                      <span
+                        className={`mt-1 shrink-0 text-on-surface-variant transition-transform ${abierto ? "rotate-90" : ""}`}
+                        aria-hidden
+                      >
+                        ›
+                      </span>
+                      <div className="min-w-0">
+                        <span className="block break-words text-body-lg font-semibold text-on-surface">{g.nombre}</span>
+                        <span className="block text-label-sm font-normal text-on-surface-variant">{g.ref}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-6">
+                      <div className="text-right">
+                        <p className="text-label-sm uppercase tracking-wide text-on-surface-variant">Clientes</p>
+                        <p className="text-body-md font-semibold tabular-nums text-on-surface">{g.items.length}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-label-sm uppercase tracking-wide text-on-surface-variant">
+                      {filtroActivo === TODOS ? "Total" : "Distribuyendo"}
                     </p>
+                        <p className="text-body-md font-semibold tabular-nums text-primary">
+                          {formatQty(g.total)}
+                          <UnitTag unit={g.unidad} />
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                </h3>
+                {abierto && (
+                  <div className="thin-scroll overflow-x-auto border-t border-outline-variant">
+                    <table className="w-full min-w-[760px] border-collapse">
+                      <thead>
+                        <tr className="bg-surface-container-low">
+                          <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Cliente</th>
+                          <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Vendedor</th>
+                          <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Equipo</th>
+                          <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Mes</th>
+                          <th className="px-3 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">Cantidad</th>
+                          <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Estado</th>
+                          {isAdmin && <th className="w-40 px-3 py-2" />}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {g.items.map((r) => (
+                          <Fila key={r.id} r={r} isAdmin={isAdmin} mesActual={mesActual} meses={meses} />
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                </div>
-              </div>
-              <div className="thin-scroll overflow-x-auto border-t border-outline-variant">
-                <table className="w-full min-w-[760px] border-collapse">
-                  <thead>
-                    <tr className="bg-surface-container-low">
-                      <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Cliente</th>
-                      <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Vendedor</th>
-                      <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Equipo</th>
-                      <th className="px-3 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">Cantidad</th>
-                      <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Hasta</th>
-                      <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Estado</th>
-                      {isAdmin && <th className="w-40 px-3 py-2" />}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.items.map((r) => (
-                      <Fila key={r.id} r={r} isAdmin={isAdmin} mesActual={mesActual} meses={meses} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          ))}
+                )}
+              </section>
+              );
+          })}
         </div>
       )}
     </div>
@@ -164,18 +259,18 @@ function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: bool
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [cantidad, setCantidad] = useState(String(r.cantidad));
-  const [hasta, setHasta] = useState(r.hasta_mes);
+  const [mes, setMes] = useState(r.mes);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const estado = estadoDe(r.hasta_mes, mesActual);
-  // A distribution that already ended is not in the "from this month on" list: keep its month selectable.
-  const opciones = meses.some((m) => m.value === r.hasta_mes) ? meses : [{ value: r.hasta_mes, label: periodLabel(r.hasta_mes) }, ...meses];
+  const estado = estadoDe(r.mes, mesActual);
+  // A distribution of a month that already passed is not in the "from this month on" list: keep its month selectable.
+  const opciones = meses.some((m) => m.value === r.mes) ? meses : [{ value: r.mes, label: periodLabel(r.mes) }, ...meses];
 
   function guardar() {
     const fd = new FormData();
     fd.set("id", String(r.id));
     fd.set("cantidad", cantidad);
-    fd.set("hasta_mes", hasta);
+    fd.set("mes", mes);
     setError(null);
     startTransition(async () => {
       const res = await updateDistribucionAction(fd);
@@ -208,6 +303,19 @@ function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: bool
         <td className="px-3 py-2 text-body-sm text-on-surface">
           <VendedorTag vendedores={r.vendedores} campo="equipo" />
         </td>
+        <td className="px-3 py-2 text-body-sm text-on-surface">
+          {editing ? (
+            <select value={mes} onChange={(e) => setMes(e.target.value)} className={inputClass}>
+              {opciones.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            periodLabel(r.mes)
+          )}
+        </td>
         <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface">
           {editing ? (
             <input
@@ -223,19 +331,6 @@ function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: bool
               {formatQty(r.cantidad)}
               <UnitTag unit={r.unidad} />
             </>
-          )}
-        </td>
-        <td className="px-3 py-2 text-body-sm text-on-surface">
-          {editing ? (
-            <select value={hasta} onChange={(e) => setHasta(e.target.value)} className={inputClass}>
-              {opciones.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          ) : (
-            periodLabel(r.hasta_mes)
           )}
         </td>
         <td className="px-3 py-2">
@@ -258,7 +353,7 @@ function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: bool
                   onClick={() => {
                     setEditing(false);
                     setCantidad(String(r.cantidad));
-                    setHasta(r.hasta_mes);
+                    setMes(r.mes);
                     setError(null);
                   }}
                   className="rounded-md px-2 py-1 text-label-sm text-on-surface-variant hover:bg-surface-container-high"
@@ -351,10 +446,27 @@ function VendedoresList({ vendedores, pos }: { vendedores: VendedorCliente[]; po
 }
 
 /** Admin form: product (from the catalog), client (existing ones are suggested; a new name is allowed), quantity, until which month. */
-function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: CatalogProduct[]; onClose: () => void }) {
+function AddDistribucion({
+  meses,
+  catalog,
+  mesInicial,
+  onSaved,
+  onClose,
+}: {
+  meses: Mes[];
+  catalog: CatalogProduct[];
+  /** Month preselected: the one being viewed, when a single month is. */
+  mesInicial: string;
+  /** Called with the month and product just saved, so the list switches to that month and opens the product. */
+  onSaved: (mes: string, producto_ref: string | undefined) => void;
+  onClose: () => void;
+}) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [state, formAction, pending] = useActionState<ActionState, FormData>(saveDistribucionAction, null);
+  // The form resets itself when the action ends, so the month that was sent is kept here.
+  const mesEnviado = useRef("");
+  const productoEnviado = useRef<string | undefined>(undefined);
   const [producto, setProducto] = useState("");
   const [partner, setPartner] = useState("");
   const [hits, setHits] = useState<Hit[]>([]);
@@ -371,6 +483,7 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
 
   useEffect(() => {
     if (state?.success) {
+      if (mesEnviado.current) onSaved(mesEnviado.current, productoEnviado.current);
       formRef.current?.reset();
       setProducto("");
       setPartner("");
@@ -423,7 +536,11 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
   return (
     <form
       ref={formRef}
-      action={formAction}
+      action={(fd) => {
+        mesEnviado.current = String(fd.get("mes") ?? "");
+        productoEnviado.current = elegido?.producto_ref;
+        return formAction(fd);
+      }}
       className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest p-4"
     >
       <div className="flex flex-col gap-1">
@@ -536,8 +653,8 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
       </div>
 
       <div className="flex flex-col gap-1">
-        <label className="text-label-sm text-on-surface-variant">Hasta qué mes</label>
-        <select name="hasta_mes" required defaultValue="" className={inputClass}>
+        <label className="text-label-sm text-on-surface-variant">Mes</label>
+        <select name="mes" required defaultValue={mesInicial} className={inputClass}>
           <option value="" disabled>
             Elige el mes
           </option>

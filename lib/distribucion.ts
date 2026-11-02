@@ -13,8 +13,8 @@ export type Distribucion = {
   unidad: Unit;
   partner: string;
   cantidad: number;
-  /** Last month (YYYY-MM) the distribution applies to — valid through the end of that month. */
-  hasta_mes: string;
+  /** The month (YYYY-MM) this amount is distributed in. */
+  mes: string;
   /** ISO timestamp of the last change. */
   actualizado: string;
   /** Vendedores that sell to this client, most recent first (empty for a client with no sales). */
@@ -54,17 +54,17 @@ export async function listDistribuciones(): Promise<Distribucion[]> {
     producto_nombre: string;
     partner: string;
     cantidad: number;
-    hasta_mes: string;
+    mes: string;
     categoria_n2: string | null;
     actualizado: string;
   }>(
-    `SELECT d.id, d.producto_ref, d.producto_nombre, d.partner, d.cantidad, d.hasta_mes, c.categoria_n2,
+    `SELECT d.id, d.producto_ref, d.producto_nombre, d.partner, d.cantidad, d.mes, c.categoria_n2,
             to_char(d.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS actualizado
      FROM distribuciones d
      LEFT JOIN (
        SELECT producto_ref, MAX(NULLIF(TRIM(categoria_n2), '')) AS categoria_n2 FROM sales GROUP BY producto_ref
      ) c ON c.producto_ref = d.producto_ref
-     ORDER BY d.producto_nombre, d.partner`
+     ORDER BY d.producto_nombre, d.mes, d.partner`
   );
   const vendedores = await vendedoresDeClientes([...new Set(rows.map((r) => r.partner))]);
   return rows.map((r) => ({
@@ -74,13 +74,13 @@ export async function listDistribuciones(): Promise<Distribucion[]> {
     unidad: unitForCategoria(r.categoria_n2),
     partner: r.partner,
     cantidad: Number(r.cantidad),
-    hasta_mes: r.hasta_mes,
+    mes: r.mes,
     actualizado: r.actualizado,
     vendedores: vendedores.get(r.partner) ?? [],
   }));
 }
 
-/** The current month and the next `count - 1`, as options for "hasta qué mes". */
+/** The current month and the next `count - 1`, as options for the month of a distribution. */
 export function mesesDisponibles(count = 18, now = new Date()): { value: string; label: string }[] {
   const [y, m] = currentMonthPeriod(now).split("-").map(Number);
   return Array.from({ length: count }, (_, i) => {

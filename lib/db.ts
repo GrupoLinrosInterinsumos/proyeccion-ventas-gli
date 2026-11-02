@@ -137,8 +137,9 @@ CREATE TABLE IF NOT EXISTS comparison_notes (
   UNIQUE (period, vendedor, producto_ref, partner)
 );
 
--- Distribución: low-stock products the admin is rationing among clients — how much each client gets
--- and until which month (YYYY-MM, valid through the end of that month). One row per product + client.
+-- Distribución: low-stock products the admin is rationing among clients — how much each client gets in a
+-- given month (mes, YYYY-MM). One row per product + client + month. (hasta_mes is the old "valid until"
+-- column; new rows just repeat the month in it.)
 CREATE TABLE IF NOT EXISTS distribuciones (
   id SERIAL PRIMARY KEY,
   producto_ref TEXT NOT NULL,
@@ -146,12 +147,31 @@ CREATE TABLE IF NOT EXISTS distribuciones (
   partner TEXT NOT NULL,
   cantidad DOUBLE PRECISION NOT NULL,
   hasta_mes TEXT NOT NULL,
+  mes TEXT,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (producto_ref, partner)
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- A distribution used to be one amount "until" a month. Now each row is one month: the old ones are expanded
+-- into one row per month from the current month up to their old end (an already-ended one keeps its last
+-- month). Idempotent: once no row has a NULL mes these statements match nothing.
+ALTER TABLE distribuciones ADD COLUMN IF NOT EXISTS mes TEXT;
+ALTER TABLE distribuciones DROP CONSTRAINT IF EXISTS distribuciones_producto_ref_partner_key;
+CREATE UNIQUE INDEX IF NOT EXISTS distribuciones_producto_partner_mes ON distribuciones (producto_ref, partner, mes);
+INSERT INTO distribuciones (producto_ref, producto_nombre, partner, cantidad, hasta_mes, mes, created_by, updated_by, created_at, updated_at)
+SELECT d.producto_ref, d.producto_nombre, d.partner, d.cantidad, d.hasta_mes, to_char(g, 'YYYY-MM'),
+       d.created_by, d.updated_by, d.created_at, d.updated_at
+FROM distribuciones d
+CROSS JOIN LATERAL generate_series(
+  LEAST(to_date(d.hasta_mes || '-01', 'YYYY-MM-DD'), date_trunc('month', now() - interval '5 hours')::date),
+  to_date(d.hasta_mes || '-01', 'YYYY-MM-DD'),
+  interval '1 month'
+) AS g
+WHERE d.mes IS NULL;
+DELETE FROM distribuciones WHERE mes IS NULL;
+ALTER TABLE distribuciones ALTER COLUMN mes SET NOT NULL;
 
 -- Clients the business treats as one: every name in "alias" is counted under "grupo" (imports, projections,
 -- comparison and exports). Rows are matched ignoring case and surrounding spaces.
@@ -190,13 +210,12 @@ GROUP BY n.period, n.vendedor, n.producto_ref, g.grupo
 ON CONFLICT (period, vendedor, producto_ref, partner) DO NOTHING;
 DELETE FROM comparison_notes n USING client_groups g WHERE UPPER(TRIM(n.partner)) = UPPER(g.alias);
 
-INSERT INTO distribuciones (producto_ref, producto_nombre, partner, cantidad, hasta_mes, created_by, updated_by)
-SELECT x.producto_ref, MAX(x.producto_nombre), g.grupo, SUM(x.cantidad), MAX(x.hasta_mes), MAX(x.created_by), MAX(x.updated_by)
+INSERT INTO distribuciones (producto_ref, producto_nombre, partner, cantidad, hasta_mes, mes, created_by, updated_by)
+SELECT x.producto_ref, MAX(x.producto_nombre), g.grupo, SUM(x.cantidad), x.mes, x.mes, MAX(x.created_by), MAX(x.updated_by)
 FROM distribuciones x JOIN client_groups g ON UPPER(TRIM(x.partner)) = UPPER(g.alias)
-GROUP BY x.producto_ref, g.grupo
-ON CONFLICT (producto_ref, partner) DO UPDATE SET
-  cantidad = distribuciones.cantidad + excluded.cantidad,
-  hasta_mes = GREATEST(distribuciones.hasta_mes, excluded.hasta_mes);
+GROUP BY x.producto_ref, x.mes, g.grupo
+ON CONFLICT (producto_ref, partner, mes) DO UPDATE SET
+  cantidad = distribuciones.cantidad + excluded.cantidad;
 DELETE FROM distribuciones d USING client_groups g WHERE UPPER(TRIM(d.partner)) = UPPER(g.alias);
 
 -- Idempotent migrations for tables that already existed before these columns were added.

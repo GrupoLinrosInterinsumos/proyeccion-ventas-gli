@@ -9,7 +9,7 @@ import { createSessionCookie, clearSessionCookie, getSession, findUserByEmail } 
 import { importSalesFile } from "@/lib/run-import";
 import { grupoDe, loadClientGroups } from "@/lib/client-groups";
 import { currentMonthPeriod } from "@/lib/comparison";
-import { openProjectionPeriod, periodStatus, closedMonthsForPeriod } from "@/lib/period";
+import { openProjectionPeriod, periodLabel, periodStatus, closedMonthsForPeriod } from "@/lib/period";
 import { isRegion } from "@/lib/regions";
 import { generatePassword } from "@/lib/password";
 import { countAdmins } from "@/lib/users";
@@ -683,7 +683,7 @@ const distribucionSchema = z.object({
   producto: z.string().trim().min(2, "Elige un producto de la lista."),
   partner: z.string().trim().min(2, "Escribe el cliente."),
   cantidad: z.string().trim().min(1, "Escribe la cantidad."),
-  hasta_mes: z.string().regex(MES_RE, "Elige hasta qué mes."),
+  mes: z.string().regex(MES_RE, "Elige el mes."),
 });
 
 export async function saveDistribucionAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -696,7 +696,7 @@ export async function saveDistribucionAction(_prev: ActionState, formData: FormD
 
   const cantidad = Number(data.cantidad.replace(/,/g, ""));
   if (!Number.isFinite(cantidad) || cantidad <= 0) return { error: "La cantidad debe ser un número mayor que 0." };
-  if (data.hasta_mes < currentMonthPeriod()) return { error: "El mes no puede ser anterior al mes actual." };
+  if (data.mes < currentMonthPeriod()) return { error: "El mes no puede ser anterior al mes actual." };
 
   // The product has to be one that exists in the catalog (picked by name or typed code).
   const producto = await queryOne<{ producto_ref: string; producto_nombre: string }>(
@@ -717,29 +717,29 @@ export async function saveDistribucionAction(_prev: ActionState, formData: FormD
   const partner = cliente?.partner ?? grupoDe(data.partner, await loadClientGroups());
 
   const existente = await queryOne<{ id: number }>(
-    `SELECT id FROM distribuciones WHERE producto_ref = $1 AND partner = $2`,
-    [producto.producto_ref, partner]
+    `SELECT id FROM distribuciones WHERE producto_ref = $1 AND partner = $2 AND mes = $3`,
+    [producto.producto_ref, partner, data.mes]
   );
   await query(
-    `INSERT INTO distribuciones (producto_ref, producto_nombre, partner, cantidad, hasta_mes, created_by, updated_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$6)
-     ON CONFLICT (producto_ref, partner) DO UPDATE SET
-       cantidad = excluded.cantidad, hasta_mes = excluded.hasta_mes,
+    `INSERT INTO distribuciones (producto_ref, producto_nombre, partner, cantidad, hasta_mes, mes, created_by, updated_by)
+     VALUES ($1,$2,$3,$4,$5,$5,$6,$6)
+     ON CONFLICT (producto_ref, partner, mes) DO UPDATE SET
+       cantidad = excluded.cantidad,
        producto_nombre = excluded.producto_nombre, updated_by = excluded.updated_by, updated_at = now()`,
-    [producto.producto_ref, producto.producto_nombre, partner, cantidad, data.hasta_mes, session.id]
+    [producto.producto_ref, producto.producto_nombre, partner, cantidad, data.mes, session.id]
   );
   revalidatePath("/distribucion");
   return {
     success: existente
-      ? `${partner} ya estaba en ${producto.producto_nombre}: se actualizó su cantidad y el mes.`
-      : "Distribución agregada.",
+      ? `${partner} ya tenía distribución de ${producto.producto_nombre} en ${periodLabel(data.mes)}: se actualizó su cantidad.`
+      : `Distribución de ${periodLabel(data.mes)} agregada.`,
   };
 }
 
 const updateDistribucionSchema = z.object({
   id: z.string().regex(/^\d+$/, "Distribución inválida."),
   cantidad: z.string().trim().min(1, "Escribe la cantidad."),
-  hasta_mes: z.string().regex(MES_RE, "Elige hasta qué mes."),
+  mes: z.string().regex(MES_RE, "Elige el mes."),
 });
 
 export async function updateDistribucionAction(formData: FormData): Promise<ActionState> {
@@ -751,9 +751,27 @@ export async function updateDistribucionAction(formData: FormData): Promise<Acti
   const cantidad = Number(parsed.data.cantidad.replace(/,/g, ""));
   if (!Number.isFinite(cantidad) || cantidad <= 0) return { error: "La cantidad debe ser un número mayor que 0." };
 
+  const id = Number(parsed.data.id);
+  const actual = await queryOne<{ producto_ref: string; partner: string; mes: string }>(
+    `SELECT producto_ref, partner, mes FROM distribuciones WHERE id = $1`,
+    [id]
+  );
+  if (!actual) return { error: "Esa distribución ya no existe." };
+
+  // Moving it to another month: not into the past, and not on top of one the client already has there.
+  const mes = parsed.data.mes;
+  if (mes !== actual.mes) {
+    if (mes < currentMonthPeriod()) return { error: "El mes no puede ser anterior al mes actual." };
+    const ocupado = await queryOne<{ id: number }>(
+      `SELECT id FROM distribuciones WHERE producto_ref = $1 AND partner = $2 AND mes = $3`,
+      [actual.producto_ref, actual.partner, mes]
+    );
+    if (ocupado) return { error: `${actual.partner} ya tiene distribución en ${periodLabel(mes)}: edita esa.` };
+  }
+
   await query(
-    `UPDATE distribuciones SET cantidad = $1, hasta_mes = $2, updated_by = $3, updated_at = now() WHERE id = $4`,
-    [cantidad, parsed.data.hasta_mes, session.id, Number(parsed.data.id)]
+    `UPDATE distribuciones SET cantidad = $1, mes = $2, hasta_mes = $2, updated_by = $3, updated_at = now() WHERE id = $4`,
+    [cantidad, mes, session.id, id]
   );
   revalidatePath("/distribucion");
   return { success: "Guardado." };
