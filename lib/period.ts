@@ -65,12 +65,26 @@ export function cierreHoraLabel(): string {
 }
 
 /**
+ * A period forced open by the PERIODO_ABIERTO environment variable (YYYY-MM), e.g. "2026-11" to let the
+ * vendedores correct an already-closed projection. While it is set, that period is the open one, the
+ * later ones are not yet editable and the earlier ones stay closed. Remove the variable to go back to
+ * the calendar.
+ */
+export function periodoReabierto(): string | null {
+  const raw = process.env.PERIODO_ABIERTO?.trim();
+  return raw && /^\d{4}-(0[1-9]|1[0-2])$/.test(raw) ? raw : null;
+}
+
+/**
  * A projection period is worked on during the calendar month *before* it, closing the last
  * day of that month at `cierreHora()` Lima time (19:00 unless CIERRE_HORA says otherwise). E.g.
  * October's projection is open all of September, closing Sep 30 19:00 — November's opens
  * immediately after.
  */
 export function openProjectionPeriod(now = new Date()): string {
+  const forced = periodoReabierto();
+  if (forced) return forced;
+
   const lima = limaNow(now);
   const y = lima.getUTCFullYear();
   const m = lima.getUTCMonth() + 1;

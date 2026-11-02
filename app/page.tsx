@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
-import { cierreHoraLabel, listRecentPeriods, periodLabel } from "@/lib/period";
+import { cierreHoraLabel, listRecentPeriods, periodLabel, periodoReabierto } from "@/lib/period";
 import { REGION_LABELS } from "@/lib/regions";
 import TopNav from "@/components/TopNav";
 
@@ -25,6 +25,12 @@ export default async function HomePage() {
           a las {cierreHoraLabel()}. Elige un periodo para verlo — los cerrados quedan como historial de solo
           lectura.
         </p>
+        {periodoReabierto() && (
+          <p className="mt-3 max-w-2xl rounded-md bg-progress px-3 py-2 text-body-sm text-on-surface">
+            La proyección de {periodLabel(periodoReabierto()!)} está reabierta temporalmente para hacer correcciones.
+            Los periodos siguientes se habilitan cuando se vuelva a cerrar.
+          </p>
+        )}
 
         <div className="mt-6 flex flex-col gap-2">
           {periods.map(({ period, status }) => (
