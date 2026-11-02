@@ -3,6 +3,9 @@ import { currentMonthPeriod } from "./comparison";
 import { periodLabel } from "./period";
 import { unitForCategoria, type Unit } from "./units";
 
+/** Who sells to a client: a vendedor and the sales team ("Equipo Vendedor") they belong to. */
+export type VendedorCliente = { vendedor: string; equipo: string };
+
 export type Distribucion = {
   id: number;
   producto_ref: string;
@@ -14,7 +17,34 @@ export type Distribucion = {
   hasta_mes: string;
   /** ISO timestamp of the last change. */
   actualizado: string;
+  /** Vendedores that sell to this client, most recent first (empty for a client with no sales). */
+  vendedores: VendedorCliente[];
 };
+
+const SIN_CLIENTE = "Sin cliente registrado";
+
+/**
+ * The vendedor(es) and team of each client, from their sales: the one that sold to them most recently
+ * first, ties broken by quantity. A client with no sales has no entry.
+ */
+export async function vendedoresDeClientes(partners: string[]): Promise<Map<string, VendedorCliente[]>> {
+  const result = new Map<string, VendedorCliente[]>();
+  if (partners.length === 0) return result;
+  const rows = await query<{ partner: string; vendedor: string; equipo: string }>(
+    `SELECT COALESCE(NULLIF(TRIM(partner), ''), '${SIN_CLIENTE}') AS partner, vendedor, region AS equipo
+     FROM sales
+     WHERE COALESCE(NULLIF(TRIM(partner), ''), '${SIN_CLIENTE}') = ANY($1::text[])
+     GROUP BY 1, vendedor, region
+     ORDER BY MAX(period) DESC, SUM(cantidad) DESC, vendedor`,
+    [partners]
+  );
+  for (const r of rows) {
+    const lista = result.get(r.partner) ?? [];
+    lista.push({ vendedor: r.vendedor, equipo: r.equipo });
+    result.set(r.partner, lista);
+  }
+  return result;
+}
 
 /** Every distribution, newest product names first-alphabetical; the page groups and filters them. */
 export async function listDistribuciones(): Promise<Distribucion[]> {
@@ -36,6 +66,7 @@ export async function listDistribuciones(): Promise<Distribucion[]> {
      ) c ON c.producto_ref = d.producto_ref
      ORDER BY d.producto_nombre, d.partner`
   );
+  const vendedores = await vendedoresDeClientes([...new Set(rows.map((r) => r.partner))]);
   return rows.map((r) => ({
     id: r.id,
     producto_ref: r.producto_ref,
@@ -45,6 +76,7 @@ export async function listDistribuciones(): Promise<Distribucion[]> {
     cantidad: Number(r.cantidad),
     hasta_mes: r.hasta_mes,
     actualizado: r.actualizado,
+    vendedores: vendedores.get(r.partner) ?? [],
   }));
 }
 

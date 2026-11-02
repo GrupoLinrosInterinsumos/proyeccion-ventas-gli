@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { query } from "@/lib/db";
+import { vendedoresDeClientes } from "@/lib/distribucion";
 
 /**
  * Existing clients matching what is being typed in "Agregar cliente": every distinct client in the
  * sales, the vendedor's own first, flagging the ones already listed under the product. Matching
- * ignores case and accents.
+ * ignores case and accents. Each client also carries its vendedor(es) and sales team, for the forms that
+ * show who sells to them.
  */
 export async function GET(req: NextRequest) {
   const session = await getSession();
@@ -37,5 +39,6 @@ export async function GET(req: NextRequest) {
      LIMIT 12`,
     [`%${term.replace(/[%_\\]/g, "")}%`, vendedor, period, producto_ref]
   );
-  return NextResponse.json({ clientes });
+  const vendedores = await vendedoresDeClientes(clientes.map((c) => c.partner));
+  return NextResponse.json({ clientes: clientes.map((c) => ({ ...c, vendedores: vendedores.get(c.partner) ?? [] })) });
 }

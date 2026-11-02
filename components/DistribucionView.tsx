@@ -10,7 +10,7 @@ import {
 } from "@/app/actions";
 import { formatQty } from "@/lib/format";
 import { periodLabel } from "@/lib/period";
-import type { Distribucion } from "@/lib/distribucion";
+import type { Distribucion, VendedorCliente } from "@/lib/distribucion";
 import type { CatalogProduct } from "@/lib/sales";
 import UnitTag from "./UnitTag";
 
@@ -133,10 +133,12 @@ export default function DistribucionView({
                 </div>
               </div>
               <div className="thin-scroll overflow-x-auto border-t border-outline-variant">
-                <table className="w-full min-w-[560px] border-collapse">
+                <table className="w-full min-w-[760px] border-collapse">
                   <thead>
                     <tr className="bg-surface-container-low">
                       <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Cliente</th>
+                      <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Vendedor</th>
+                      <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Equipo</th>
                       <th className="px-3 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">Cantidad</th>
                       <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Hasta</th>
                       <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Estado</th>
@@ -200,6 +202,12 @@ function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: bool
     <Fragment>
       <tr className={`border-t border-outline-variant ${estado === "Vencida" ? "opacity-60" : ""}`}>
         <td className="break-words px-3 py-2 text-body-sm text-on-surface">{r.partner}</td>
+        <td className="px-3 py-2 text-body-sm text-on-surface">
+          <VendedorTag vendedores={r.vendedores} campo="vendedor" />
+        </td>
+        <td className="px-3 py-2 text-body-sm text-on-surface">
+          <VendedorTag vendedores={r.vendedores} campo="equipo" />
+        </td>
         <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface">
           {editing ? (
             <input
@@ -280,7 +288,7 @@ function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: bool
       </tr>
       {error && (
         <tr>
-          <td colSpan={isAdmin ? 5 : 4} className="px-3 pb-2 text-body-sm text-secondary">
+          <td colSpan={isAdmin ? 7 : 6} className="px-3 pb-2 text-body-sm text-secondary">
             {error}
           </td>
         </tr>
@@ -289,7 +297,23 @@ function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: bool
   );
 }
 
-type Hit = { partner: string };
+type Hit = { partner: string; vendedores: VendedorCliente[] };
+
+/** The vendedor (or team) that sold to the client most recently; "+N" when other vendedores also did. */
+function VendedorTag({ vendedores, campo }: { vendedores: VendedorCliente[]; campo: keyof VendedorCliente }) {
+  if (vendedores.length === 0) return <span className="text-on-surface-variant">—</span>;
+  const valores = [...new Set(vendedores.map((v) => v[campo]))];
+  return (
+    <span title={valores.join(", ")}>
+      {valores[0]}
+      {valores.length > 1 && (
+        <span className="ml-1.5 rounded bg-surface-container-high px-1 py-0.5 text-label-sm text-on-surface-variant">
+          +{valores.length - 1}
+        </span>
+      )}
+    </span>
+  );
+}
 
 /** Admin form: product (from the catalog), client (existing ones are suggested; a new name is allowed), quantity, until which month. */
 function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: CatalogProduct[]; onClose: () => void }) {
@@ -299,6 +323,8 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
   const [producto, setProducto] = useState("");
   const [partner, setPartner] = useState("");
   const [hits, setHits] = useState<Hit[]>([]);
+  // The suggestion the admin chose (or typed in full): its vendedor and team are shown under the field.
+  const [picked, setPicked] = useState<Hit | null>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -313,6 +339,7 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
       formRef.current?.reset();
       setProducto("");
       setPartner("");
+      setPicked(null);
       setHits([]);
       router.refresh();
     }
@@ -326,15 +353,19 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
       setOpen(false);
       return;
     }
+    if (picked && picked.partner === partner) return;
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/clientes?${new URLSearchParams({ q: term, vendedor: "", producto_ref: "", period: "" })}`);
         const data = await res.json();
         if (!cancelled) {
-          setHits(data.clientes ?? []);
+          const found: Hit[] = data.clientes ?? [];
+          setHits(found);
           setActive(0);
           setOpen(true);
+          // Typing a client's full name is as good as picking it from the list.
+          setPicked(found.find((h) => h.partner.toLowerCase() === term.toLowerCase()) ?? null);
         }
       } catch {
         if (!cancelled) setHits([]);
@@ -344,7 +375,7 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [partner]);
+  }, [partner]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -388,7 +419,10 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
           <input
             name="partner"
             value={partner}
-            onChange={(e) => setPartner(e.target.value)}
+            onChange={(e) => {
+              setPartner(e.target.value);
+              setPicked(null);
+            }}
             onFocus={() => hits.length > 0 && setOpen(true)}
             onKeyDown={(e) => {
               if (!open || hits.length === 0) return;
@@ -401,6 +435,7 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
               } else if (e.key === "Enter") {
                 e.preventDefault();
                 setPartner(hits[active].partner);
+                setPicked(hits[active]);
                 setOpen(false);
               } else if (e.key === "Escape") setOpen(false);
             }}
@@ -417,14 +452,46 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
                   onMouseDown={(e) => {
                     e.preventDefault();
                     setPartner(h.partner);
+                    setPicked(h);
                     setOpen(false);
                   }}
                   className={`cursor-pointer px-3 py-1.5 text-body-sm ${i === active ? "bg-primary-fixed" : "hover:bg-primary-fixed/50"}`}
                 >
                   {h.partner}
+                  <span className="block text-label-sm text-on-surface-variant">
+                    {h.vendedores.length > 0
+                      ? `${h.vendedores[0].vendedor} · ${h.vendedores[0].equipo}${h.vendedores.length > 1 ? ` (+${h.vendedores.length - 1})` : ""}`
+                      : "Sin ventas registradas"}
+                  </span>
                 </li>
               ))}
             </ul>
+          )}
+        </div>
+        <p className="h-4" />
+      </div>
+
+      <div className="flex min-w-48 flex-col gap-1">
+        <label className="text-label-sm text-on-surface-variant">Vendedor y equipo</label>
+        <div className="flex h-[34px] items-center text-body-sm text-on-surface">
+          {picked && picked.vendedores.length > 0 ? (
+            <span title={picked.vendedores.map((v) => `${v.vendedor} · ${v.equipo}`).join(", ")}>
+              {picked.vendedores[0].vendedor}
+              <span className="text-on-surface-variant"> · {picked.vendedores[0].equipo}</span>
+              {picked.vendedores.length > 1 && (
+                <span className="ml-1.5 rounded bg-surface-container-high px-1 py-0.5 text-label-sm text-on-surface-variant">
+                  +{picked.vendedores.length - 1}
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className="text-on-surface-variant">{picked
+                ? "Sin ventas registradas"
+                : partner.trim() === ""
+                  ? "Elige un cliente"
+                  : hits.length > 0
+                    ? "Elige uno de la lista"
+                    : "Cliente nuevo, sin vendedor"}</span>
           )}
         </div>
         <p className="h-4" />
