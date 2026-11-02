@@ -299,18 +299,53 @@ function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: bool
 
 type Hit = { partner: string; vendedores: VendedorCliente[] };
 
-/** The vendedor (or team) that sold to the client most recently; "+N" when other vendedores also did. */
+/**
+ * The vendedor (or team) that sold to the client most recently, with "+N" when others did too. Hovering
+ * it lists every vendedor with their team. The list is fixed-positioned so the table's scroll area
+ * does not clip it.
+ */
 function VendedorTag({ vendedores, campo }: { vendedores: VendedorCliente[]; campo: keyof VendedorCliente }) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   if (vendedores.length === 0) return <span className="text-on-surface-variant">—</span>;
   const valores = [...new Set(vendedores.map((v) => v[campo]))];
+  const hay = vendedores.length > 1;
   return (
-    <span title={valores.join(", ")}>
+    <span
+      className={hay ? "cursor-help" : undefined}
+      onMouseEnter={(e) => {
+        if (!hay) return;
+        const r = e.currentTarget.getBoundingClientRect();
+        setPos({ x: r.left, y: r.bottom + 4 });
+      }}
+      onMouseLeave={() => setPos(null)}
+    >
       {valores[0]}
       {valores.length > 1 && (
         <span className="ml-1.5 rounded bg-surface-container-high px-1 py-0.5 text-label-sm text-on-surface-variant">
           +{valores.length - 1}
         </span>
       )}
+      {pos && <VendedoresList vendedores={vendedores} pos={pos} />}
+    </span>
+  );
+}
+
+function VendedoresList({ vendedores, pos }: { vendedores: VendedorCliente[]; pos: { x: number; y: number } }) {
+  return (
+    <span
+      role="tooltip"
+      style={{ position: "fixed", left: Math.min(pos.x, window.innerWidth - 300), top: pos.y }}
+      className="z-50 block w-72 max-w-[90vw] rounded-md border border-outline-variant bg-surface-container-lowest p-2 text-left shadow-lg shadow-black/10"
+    >
+      <span className="mb-1 block text-label-sm uppercase tracking-wide text-on-surface-variant">
+        Vendedores del cliente ({vendedores.length})
+      </span>
+      {vendedores.map((v) => (
+        <span key={`${v.vendedor}|${v.equipo}`} className="flex justify-between gap-3 py-0.5 text-body-sm text-on-surface">
+          <span className="break-words">{v.vendedor}</span>
+          <span className="shrink-0 text-on-surface-variant">{v.equipo}</span>
+        </span>
+      ))}
     </span>
   );
 }
@@ -475,14 +510,9 @@ function AddDistribucion({ meses, catalog, onClose }: { meses: Mes[]; catalog: C
         <label className="text-label-sm text-on-surface-variant">Vendedor y equipo</label>
         <div className="flex h-[34px] items-center text-body-sm text-on-surface">
           {picked && picked.vendedores.length > 0 ? (
-            <span title={picked.vendedores.map((v) => `${v.vendedor} · ${v.equipo}`).join(", ")}>
-              {picked.vendedores[0].vendedor}
+            <span>
+              <VendedorTag vendedores={picked.vendedores} campo="vendedor" />
               <span className="text-on-surface-variant"> · {picked.vendedores[0].equipo}</span>
-              {picked.vendedores.length > 1 && (
-                <span className="ml-1.5 rounded bg-surface-container-high px-1 py-0.5 text-label-sm text-on-surface-variant">
-                  +{picked.vendedores.length - 1}
-                </span>
-              )}
             </span>
           ) : (
             <span className="text-on-surface-variant">{picked
