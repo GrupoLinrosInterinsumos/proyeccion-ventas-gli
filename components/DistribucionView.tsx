@@ -31,6 +31,67 @@ const TAG: Record<Estado, string> = {
 };
 
 const TODOS = "todos";
+const SIN_EQUIPO = "Sin equipo";
+const SIN_VENDEDOR = "Sin vendedor";
+/** Separator of the keys of the open/closed folds: product, product + team, product + team + vendedor. */
+const SEP = "::";
+
+type GrupoEquipo = {
+  equipo: string;
+  total: number;
+  clientes: number;
+  vendedores: { vendedor: string; total: number; clientes: number; items: Distribucion[] }[];
+};
+
+/**
+ * One product's rows grouped by sales team and then by vendedor. A distribution belongs to the vendedor who
+ * sold to the client most recently (a client with no sales has none: "Sin equipo" / "Sin vendedor"). Past
+ * months do not add to a total.
+ */
+function agruparPorEquipo(items: Distribucion[], mesActual: string): GrupoEquipo[] {
+  const porEquipo = new Map<string, Map<string, Distribucion[]>>();
+  for (const r of items) {
+    const v = r.vendedores[0];
+    const equipo = v?.equipo ?? SIN_EQUIPO;
+    const vendedor = v?.vendedor ?? SIN_VENDEDOR;
+    const porVendedor = porEquipo.get(equipo) ?? new Map<string, Distribucion[]>();
+    porVendedor.set(vendedor, [...(porVendedor.get(vendedor) ?? []), r]);
+    porEquipo.set(equipo, porVendedor);
+  }
+  const suma = (rs: Distribucion[]) =>
+    rs.filter((i) => estadoDe(i.mes, mesActual) !== "Vencida").reduce((t, i) => t + i.cantidad, 0);
+  return [...porEquipo]
+    .map(([equipo, porVendedor]) => {
+      const todos = [...porVendedor.values()].flat();
+      return {
+        equipo,
+        total: suma(todos),
+        clientes: new Set(todos.map((i) => i.partner)).size,
+        vendedores: [...porVendedor]
+          .map(([vendedor, rs]) => ({
+            vendedor,
+            total: suma(rs),
+            clientes: new Set(rs.map((i) => i.partner)).size,
+            items: [...rs].sort((a, b) => a.mes.localeCompare(b.mes) || b.cantidad - a.cantidad),
+          }))
+          .sort((a, b) => b.total - a.total || a.vendedor.localeCompare(b.vendedor, "es")),
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(a.equipo === SIN_EQUIPO) - Number(b.equipo === SIN_EQUIPO) ||
+        b.total - a.total ||
+        a.equipo.localeCompare(b.equipo, "es")
+    );
+}
+
+/** Fold keys of every team and vendedor of a product, to open them all at once. */
+function clavesDeProducto(ref: string, equipos: GrupoEquipo[]): string[] {
+  return equipos.flatMap((e) => [
+    `${ref}${SEP}${e.equipo}`,
+    ...e.vendedores.map((v) => `${ref}${SEP}${e.equipo}${SEP}${v.vendedor}`),
+  ]);
+}
 
 const inputClass =
   "rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20";
@@ -77,7 +138,16 @@ export default function DistribucionView({
     for (const r of rows) {
       if (!verVencidas && estadoDe(r.mes, mesActual) === "Vencida") continue;
       if (filtroActivo !== TODOS && r.mes !== filtroActivo) continue;
-      if (term && !(norm(r.producto_nombre).includes(term) || norm(r.producto_ref).includes(term) || norm(r.partner).includes(term))) continue;
+      if (
+        term &&
+        !(
+          norm(r.producto_nombre).includes(term) ||
+          norm(r.producto_ref).includes(term) ||
+          norm(r.partner).includes(term) ||
+          r.vendedores.some((v) => norm(v.vendedor).includes(term) || norm(v.equipo).includes(term))
+        )
+      )
+        continue;
       const g = map.get(r.producto_ref) ?? { ref: r.producto_ref, nombre: r.producto_nombre, unidad: r.unidad, items: [] };
       g.items.push(r);
       map.set(r.producto_ref, g);
@@ -89,15 +159,26 @@ export default function DistribucionView({
         ...g,
         items: [...g.items].sort((a, b) => a.mes.localeCompare(b.mes) || b.cantidad - a.cantidad),
         total: total(g.items),
+        equipos: agruparPorEquipo(g.items, mesActual),
       }))
       .sort((a, b) => b.total - a.total || a.nombre.localeCompare(b.nombre, "es"));
   }, [rows, term, verVencidas, mesActual, filtroActivo]);
 
-  // Searching opens what matches, so the client you looked for is not hidden behind a fold.
+  // Searching opens what matches (the product, its teams and vendedores), so the client you looked for is not
+  // hidden behind a fold.
   useEffect(() => {
-    if (term) setAbiertos(new Set(grupos.map((g) => g.ref)));
+    if (term) setAbiertos(new Set(grupos.flatMap((g) => [g.ref, ...clavesDeProducto(g.ref, g.equipos)])));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [term]);
+
+  // After saving a distribution, its product opens all the way down once the list has the new row.
+  const [pendiente, setPendiente] = useState<{ ref: string; filas: Distribucion[] } | null>(null);
+  useEffect(() => {
+    if (!pendiente || rows === pendiente.filas) return;
+    const g = grupos.find((x) => x.ref === pendiente.ref);
+    if (g) setAbiertos((prev) => new Set([...prev, g.ref, ...clavesDeProducto(g.ref, g.equipos)]));
+    setPendiente(null);
+  }, [rows, pendiente, grupos]);
 
   function alternar(ref: string) {
     setAbiertos((prev) => {
@@ -165,7 +246,10 @@ export default function DistribucionView({
           mesInicial={filtroActivo === TODOS ? "" : filtroActivo}
           onSaved={(mes, ref) => {
             setMesFiltro(mes);
-            if (ref) setAbiertos((prev) => new Set(prev).add(ref));
+            if (ref) {
+              setAbiertos((prev) => new Set(prev).add(ref));
+              setPendiente({ ref, filas: rows });
+            }
           }}
           onClose={() => setAdding(false)}
         />
@@ -225,25 +309,91 @@ export default function DistribucionView({
                   </button>
                 </h3>
                 {abierto && (
-                  <div className="thin-scroll overflow-x-auto border-t border-outline-variant">
-                    <table className="w-full min-w-[760px] border-collapse">
-                      <thead>
-                        <tr className="bg-surface-container-low">
-                          <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Cliente</th>
-                          <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Vendedor</th>
-                          <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Equipo</th>
-                          <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Mes</th>
-                          <th className="px-3 py-2 text-right text-label-md uppercase tracking-wide text-on-surface-variant">Cantidad</th>
-                          <th className="px-3 py-2 text-left text-label-md uppercase tracking-wide text-on-surface-variant">Estado</th>
-                          {isAdmin && <th className="w-40 px-3 py-2" />}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {g.items.map((r) => (
-                          <Fila key={r.id} r={r} isAdmin={isAdmin} mesActual={mesActual} meses={meses} />
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="border-t border-outline-variant">
+                    {g.equipos.map((e) => {
+                      const claveE = `${g.ref}${SEP}${e.equipo}`;
+                      const abiertoE = abiertos.has(claveE);
+                      return (
+                        <div key={claveE} className="border-t border-outline-variant first:border-t-0">
+                          <button
+                            type="button"
+                            onClick={() => alternar(claveE)}
+                            aria-expanded={abiertoE}
+                            className="flex w-full flex-wrap items-center justify-between gap-3 bg-surface-container-low px-4 py-2.5 text-left hover:bg-surface-container-high"
+                          >
+                            <span className="flex items-center gap-2 text-body-md font-semibold text-on-surface">
+                              <span
+                                className={`text-on-surface-variant transition-transform ${abiertoE ? "rotate-90" : ""}`}
+                                aria-hidden
+                              >
+                                ›
+                              </span>
+                              {e.equipo}
+                              <span className="text-label-sm font-normal text-on-surface-variant">
+                                {e.vendedores.length} vendedor{e.vendedores.length === 1 ? "" : "es"} · {e.clientes} cliente
+                                {e.clientes === 1 ? "" : "s"}
+                              </span>
+                            </span>
+                            <span className="text-body-sm font-semibold tabular-nums text-primary">
+                              {formatQty(e.total)}
+                              <UnitTag unit={g.unidad} />
+                            </span>
+                          </button>
+                          {abiertoE &&
+                            e.vendedores.map((v) => {
+                              const claveV = `${claveE}${SEP}${v.vendedor}`;
+                              const abiertoV = abiertos.has(claveV);
+                              return (
+                                <div key={claveV} className="border-t border-outline-variant">
+                                  <button
+                                    type="button"
+                                    onClick={() => alternar(claveV)}
+                                    aria-expanded={abiertoV}
+                                    className="flex w-full flex-wrap items-center justify-between gap-3 px-4 py-2 pl-9 text-left hover:bg-surface-container-low"
+                                  >
+                                    <span className="flex items-center gap-2 text-body-sm font-medium text-on-surface">
+                                      <span
+                                        className={`text-on-surface-variant transition-transform ${abiertoV ? "rotate-90" : ""}`}
+                                        aria-hidden
+                                      >
+                                        ›
+                                      </span>
+                                      {v.vendedor}
+                                      <span className="text-label-sm font-normal text-on-surface-variant">
+                                        {v.clientes} cliente{v.clientes === 1 ? "" : "s"}
+                                      </span>
+                                    </span>
+                                    <span className="text-body-sm font-semibold tabular-nums text-primary">
+                                      {formatQty(v.total)}
+                                      <UnitTag unit={g.unidad} />
+                                    </span>
+                                  </button>
+                                  {abiertoV && (
+                                    <div className="thin-scroll overflow-x-auto border-t border-outline-variant">
+                                      <table className="w-full min-w-[640px] border-collapse">
+                                        <thead>
+                                          <tr className="bg-surface-container-low/60">
+                                            <th className="py-1.5 pl-14 pr-3 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">Cliente</th>
+                                            <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">Mes</th>
+                                            <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">Cantidad</th>
+                                            <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">Estado</th>
+                                            {isAdmin && <th className="w-40 px-3 py-1.5" />}
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {v.items.map((r) => (
+                                            <Fila key={r.id} r={r} isAdmin={isAdmin} mesActual={mesActual} meses={meses} />
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </section>
@@ -296,12 +446,13 @@ function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: bool
   return (
     <Fragment>
       <tr className={`border-t border-outline-variant ${estado === "Vencida" ? "opacity-60" : ""}`}>
-        <td className="break-words px-3 py-2 text-body-sm text-on-surface">{r.partner}</td>
-        <td className="px-3 py-2 text-body-sm text-on-surface">
-          <VendedorTag vendedores={r.vendedores} campo="vendedor" />
-        </td>
-        <td className="px-3 py-2 text-body-sm text-on-surface">
-          <VendedorTag vendedores={r.vendedores} campo="equipo" />
+        <td className="break-words py-2 pl-14 pr-3 text-body-sm text-on-surface">
+          {r.partner}
+          {r.vendedores.length > 1 && (
+            <span className="mt-0.5 block text-label-sm text-on-surface-variant">
+              Vendedores: <VendedorTag vendedores={r.vendedores} campo="vendedor" />
+            </span>
+          )}
         </td>
         <td className="px-3 py-2 text-body-sm text-on-surface">
           {editing ? (
@@ -383,7 +534,7 @@ function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: bool
       </tr>
       {error && (
         <tr>
-          <td colSpan={isAdmin ? 7 : 6} className="px-3 pb-2 text-body-sm text-secondary">
+          <td colSpan={isAdmin ? 5 : 4} className="px-3 pb-2 text-body-sm text-secondary">
             {error}
           </td>
         </tr>
