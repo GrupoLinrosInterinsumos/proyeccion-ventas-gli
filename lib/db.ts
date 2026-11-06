@@ -137,7 +137,22 @@ CREATE TABLE IF NOT EXISTS comparison_notes (
   UNIQUE (period, vendedor, producto_ref, partner)
 );
 
--- Distribución: low-stock products the admin is rationing among clients — how much each client gets in a
+-- Ajuste: what the admin sets in the comparison page in place of a vendedor's projection for one client
+-- (cantidad replaces the projected amount). The Distribución page only shows these.
+CREATE TABLE IF NOT EXISTS ajustes_proyeccion (
+  id SERIAL PRIMARY KEY,
+  period TEXT NOT NULL,
+  vendedor TEXT NOT NULL,
+  producto_ref TEXT NOT NULL,
+  producto_nombre TEXT NOT NULL,
+  partner TEXT NOT NULL,
+  cantidad DOUBLE PRECISION NOT NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (period, vendedor, producto_ref, partner)
+);
+
+-- Distribución (old): low-stock products the admin was rationing among clients — how much each client gets in a
 -- given month (mes, YYYY-MM). One row per product + client + month. (hasta_mes is the old "valid until"
 -- column; new rows just repeat the month in it.)
 CREATE TABLE IF NOT EXISTS distribuciones (
@@ -210,6 +225,14 @@ GROUP BY n.period, n.vendedor, n.producto_ref, g.grupo
 ON CONFLICT (period, vendedor, producto_ref, partner) DO NOTHING;
 DELETE FROM comparison_notes n USING client_groups g WHERE UPPER(TRIM(n.partner)) = UPPER(g.alias);
 
+INSERT INTO ajustes_proyeccion (period, vendedor, producto_ref, producto_nombre, partner, cantidad, updated_by, updated_at)
+SELECT a.period, a.vendedor, a.producto_ref, MAX(a.producto_nombre), g.grupo, SUM(a.cantidad), MAX(a.updated_by), MAX(a.updated_at)
+FROM ajustes_proyeccion a JOIN client_groups g ON UPPER(TRIM(a.partner)) = UPPER(g.alias)
+GROUP BY a.period, a.vendedor, a.producto_ref, g.grupo
+ON CONFLICT (period, vendedor, producto_ref, partner) DO UPDATE SET
+  cantidad = ajustes_proyeccion.cantidad + excluded.cantidad;
+DELETE FROM ajustes_proyeccion a USING client_groups g WHERE UPPER(TRIM(a.partner)) = UPPER(g.alias);
+
 INSERT INTO distribuciones (producto_ref, producto_nombre, partner, cantidad, hasta_mes, mes, created_by, updated_by)
 SELECT x.producto_ref, MAX(x.producto_nombre), g.grupo, SUM(x.cantidad), x.mes, x.mes, MAX(x.created_by), MAX(x.updated_by)
 FROM distribuciones x JOIN client_groups g ON UPPER(TRIM(x.partner)) = UPPER(g.alias)
@@ -217,6 +240,32 @@ GROUP BY x.producto_ref, x.mes, g.grupo
 ON CONFLICT (producto_ref, partner, mes) DO UPDATE SET
   cantidad = distribuciones.cantidad + excluded.cantidad;
 DELETE FROM distribuciones d USING client_groups g WHERE UPPER(TRIM(d.partner)) = UPPER(g.alias);
+
+-- The old distributions become adjustments (mes = period). Each goes to the vendedor who projected that client
+-- and product that month, else who last sold them that product, else who last sold to them, else the last one
+-- that projected them; with none of those it is kept under "Sin vendedor". The old rows stay in place, flagged
+-- as migrated, so this runs once for each of them even though it is part of the schema.
+ALTER TABLE distribuciones ADD COLUMN IF NOT EXISTS migrada BOOLEAN NOT NULL DEFAULT FALSE;
+INSERT INTO ajustes_proyeccion (period, vendedor, producto_ref, producto_nombre, partner, cantidad, updated_by, updated_at)
+SELECT d.mes,
+       COALESCE(
+         (SELECT cp.vendedor FROM client_projections cp
+          WHERE cp.period = d.mes AND cp.producto_ref = d.producto_ref AND cp.partner = d.partner
+          ORDER BY cp.proyeccion_cantidad DESC NULLS LAST LIMIT 1),
+         (SELECT s.vendedor FROM sales s
+          WHERE s.producto_ref = d.producto_ref AND COALESCE(NULLIF(TRIM(s.partner), ''), 'Sin cliente registrado') = d.partner
+          GROUP BY s.vendedor ORDER BY MAX(s.period) DESC, SUM(s.cantidad) DESC LIMIT 1),
+         (SELECT s.vendedor FROM sales s
+          WHERE COALESCE(NULLIF(TRIM(s.partner), ''), 'Sin cliente registrado') = d.partner
+          GROUP BY s.vendedor ORDER BY MAX(s.period) DESC, SUM(s.cantidad) DESC LIMIT 1),
+         (SELECT cp.vendedor FROM client_projections cp WHERE cp.partner = d.partner ORDER BY cp.period DESC LIMIT 1),
+         'Sin vendedor'
+       ),
+       d.producto_ref, d.producto_nombre, d.partner, d.cantidad, d.updated_by, d.updated_at
+FROM distribuciones d
+WHERE NOT d.migrada
+ON CONFLICT (period, vendedor, producto_ref, partner) DO NOTHING;
+UPDATE distribuciones SET migrada = TRUE WHERE NOT migrada;
 
 -- Idempotent migrations for tables that already existed before these columns were added.
 ALTER TABLE imports ADD COLUMN IF NOT EXISTS data_hasta DATE;

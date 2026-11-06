@@ -23,6 +23,8 @@ export type MonthComparison = {
   productos: Record<string, ComparisonProduct>;
   /** Observaciones left on "superó la proyección" clients, keyed `vendedor|producto_ref|partner`. */
   notas: Record<string, string>;
+  /** Admin adjustments of a client's projection, keyed `vendedor|producto_ref|partner`. */
+  ajustes: Record<string, number>;
   /** Sede (LIMA / AREQUIPA / TRUJILLO) of each vendedor in the data, for the sede filter. */
   sedes: Record<string, string>;
   /** Date (YYYY-MM-DD) up to which the sales data goes; null when there are no sales for the month. */
@@ -103,6 +105,24 @@ export async function getMonthComparison(period: string, vendedor?: string): Pro
     row[6] += Number(s.usd ?? 0);
   }
 
+  // An adjusted client shows up even if it neither projected nor sold.
+  const ajustesRows = await query<{
+    vendedor: string;
+    producto_ref: string;
+    producto_nombre: string;
+    partner: string;
+    cantidad: number;
+  }>(
+    `SELECT vendedor, producto_ref, producto_nombre, partner, cantidad
+     FROM ajustes_proyeccion WHERE period = $1${scope}`,
+    params
+  );
+  const ajustes: Record<string, number> = {};
+  for (const a of ajustesRows) {
+    rowFor(a.vendedor, a.producto_ref, a.producto_nombre, a.partner);
+    ajustes[`${a.vendedor}|${a.producto_ref}|${a.partner}`] = Number(a.cantidad);
+  }
+
   const notasRows = await query<{ vendedor: string; producto_ref: string; partner: string; nota: string }>(
     `SELECT vendedor, producto_ref, partner, nota FROM comparison_notes WHERE period = $1${scope}`,
     params
@@ -135,6 +155,7 @@ export async function getMonthComparison(period: string, vendedor?: string): Pro
     rows: [...rows.values()].map(([v, ref, c, pq, pu, rq, ru]) => [v, ref, c, r2(pq), r2(pu), r2(rq), r2(ru)]),
     productos,
     notas,
+    ajustes,
     sedes,
     hasta: imp?.data_hasta ?? null,
     actualizado: imp?.uploaded_at ?? null,

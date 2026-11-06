@@ -1,11 +1,10 @@
 import { query } from "./db";
-import { currentMonthPeriod } from "./comparison";
-import { periodLabel } from "./period";
 import { unitForCategoria, type Unit } from "./units";
 
 /** Who sells to a client: a vendedor and the sales team ("Equipo Vendedor") they belong to. */
 export type VendedorCliente = { vendedor: string; equipo: string };
 
+/** One adjusted quantity (from the comparison page): what a client gets of a product in a month. */
 export type Distribucion = {
   id: number;
   producto_ref: string;
@@ -13,12 +12,13 @@ export type Distribucion = {
   unidad: Unit;
   partner: string;
   cantidad: number;
-  /** The month (YYYY-MM) this amount is distributed in. */
+  /** The month (YYYY-MM) the adjustment belongs to. */
   mes: string;
   /** ISO timestamp of the last change. */
   actualizado: string;
-  /** Vendedores that sell to this client, most recent first (empty for a client with no sales). */
-  vendedores: VendedorCliente[];
+  /** The vendedor whose projection was adjusted, and their sales team. */
+  vendedor: string;
+  equipo: string;
 };
 
 const SIN_CLIENTE = "Sin cliente registrado";
@@ -46,27 +46,35 @@ export async function vendedoresDeClientes(partners: string[]): Promise<Map<stri
   return result;
 }
 
-/** Every distribution, newest product names first-alphabetical; the page groups and filters them. */
+/** Every adjustment the admin has set, with the team of its vendedor; the page groups and filters them. */
 export async function listDistribuciones(): Promise<Distribucion[]> {
   const rows = await query<{
     id: number;
     producto_ref: string;
     producto_nombre: string;
+    vendedor: string;
     partner: string;
     cantidad: number;
     mes: string;
     categoria_n2: string | null;
+    equipo: string | null;
     actualizado: string;
   }>(
-    `SELECT d.id, d.producto_ref, d.producto_nombre, d.partner, d.cantidad, d.mes, c.categoria_n2,
-            to_char(d.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS actualizado
-     FROM distribuciones d
+    `SELECT a.id, a.producto_ref, a.producto_nombre, a.vendedor, a.partner, a.cantidad, a.period AS mes,
+            c.categoria_n2, e.equipo,
+            to_char(a.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS actualizado
+     FROM ajustes_proyeccion a
      LEFT JOIN (
        SELECT producto_ref, MAX(NULLIF(TRIM(categoria_n2), '')) AS categoria_n2 FROM sales GROUP BY producto_ref
-     ) c ON c.producto_ref = d.producto_ref
-     ORDER BY d.producto_nombre, d.mes, d.partner`
+     ) c ON c.producto_ref = a.producto_ref
+     LEFT JOIN (
+       SELECT vendedor, MAX(region) AS equipo FROM (
+         SELECT vendedor, region FROM users WHERE vendedor IS NOT NULL AND region IS NOT NULL
+         UNION ALL SELECT vendedor, region FROM sales WHERE region IS NOT NULL
+       ) t GROUP BY vendedor
+     ) e ON e.vendedor = a.vendedor
+     ORDER BY a.producto_nombre, a.period, a.partner`
   );
-  const vendedores = await vendedoresDeClientes([...new Set(rows.map((r) => r.partner))]);
   return rows.map((r) => ({
     id: r.id,
     producto_ref: r.producto_ref,
@@ -76,16 +84,7 @@ export async function listDistribuciones(): Promise<Distribucion[]> {
     cantidad: Number(r.cantidad),
     mes: r.mes,
     actualizado: r.actualizado,
-    vendedores: vendedores.get(r.partner) ?? [],
+    vendedor: r.vendedor,
+    equipo: r.equipo ?? "",
   }));
-}
-
-/** The current month and the next `count - 1`, as options for the month of a distribution. */
-export function mesesDisponibles(count = 18, now = new Date()): { value: string; label: string }[] {
-  const [y, m] = currentMonthPeriod(now).split("-").map(Number);
-  return Array.from({ length: count }, (_, i) => {
-    const z = y * 12 + (m - 1) + i;
-    const value = `${Math.floor(z / 12)}-${String((z % 12) + 1).padStart(2, "0")}`;
-    return { value, label: periodLabel(value) };
-  });
 }

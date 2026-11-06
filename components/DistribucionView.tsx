@@ -1,20 +1,11 @@
 "use client";
 
-import { Fragment, useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import {
-  saveDistribucionAction,
-  updateDistribucionAction,
-  deleteDistribucionAction,
-  type ActionState,
-} from "@/app/actions";
+import { useEffect, useMemo, useState } from "react";
 import { formatQty } from "@/lib/format";
 import { periodLabel } from "@/lib/period";
-import type { Distribucion, VendedorCliente } from "@/lib/distribucion";
-import type { CatalogProduct } from "@/lib/sales";
+import type { Distribucion } from "@/lib/distribucion";
 import UnitTag from "./UnitTag";
 
-type Mes = { value: string; label: string };
 type Estado = "Vigente" | "Programada" | "Vencida";
 
 const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -43,17 +34,12 @@ type GrupoEquipo = {
   vendedores: { vendedor: string; total: number; clientes: number; items: Distribucion[] }[];
 };
 
-/**
- * One product's rows grouped by sales team and then by vendedor. A distribution belongs to the vendedor who
- * sold to the client most recently (a client with no sales has none: "Sin equipo" / "Sin vendedor"). Past
- * months do not add to a total.
- */
+/** One product's rows grouped by sales team and then by vendedor. Past months do not add to a total. */
 function agruparPorEquipo(items: Distribucion[], mesActual: string): GrupoEquipo[] {
   const porEquipo = new Map<string, Map<string, Distribucion[]>>();
   for (const r of items) {
-    const v = r.vendedores[0];
-    const equipo = v?.equipo ?? SIN_EQUIPO;
-    const vendedor = v?.vendedor ?? SIN_VENDEDOR;
+    const equipo = r.equipo || SIN_EQUIPO;
+    const vendedor = r.vendedor || SIN_VENDEDOR;
     const porVendedor = porEquipo.get(equipo) ?? new Map<string, Distribucion[]>();
     porVendedor.set(vendedor, [...(porVendedor.get(vendedor) ?? []), r]);
     porEquipo.set(equipo, porVendedor);
@@ -96,22 +82,9 @@ function clavesDeProducto(ref: string, equipos: GrupoEquipo[]): string[] {
 const inputClass =
   "rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20";
 
-export default function DistribucionView({
-  rows,
-  isAdmin,
-  mesActual,
-  meses,
-  catalog,
-}: {
-  rows: Distribucion[];
-  isAdmin: boolean;
-  mesActual: string;
-  meses: Mes[];
-  catalog: CatalogProduct[];
-}) {
+export default function DistribucionView({ rows, mesActual }: { rows: Distribucion[]; mesActual: string }) {
   const [search, setSearch] = useState("");
   const [verVencidas, setVerVencidas] = useState(false);
-  const [adding, setAdding] = useState(false);
   // Which month is shown: this one when it has distributions, otherwise all of them.
   const [mesFiltro, setMesFiltro] = useState<string>(() =>
     rows.some((r) => r.mes === mesActual) ? mesActual : TODOS
@@ -144,7 +117,8 @@ export default function DistribucionView({
           norm(r.producto_nombre).includes(term) ||
           norm(r.producto_ref).includes(term) ||
           norm(r.partner).includes(term) ||
-          r.vendedores.some((v) => norm(v.vendedor).includes(term) || norm(v.equipo).includes(term))
+          norm(r.vendedor).includes(term) ||
+          norm(r.equipo).includes(term)
         )
       )
         continue;
@@ -171,15 +145,6 @@ export default function DistribucionView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [term]);
 
-  // After saving a distribution, its product opens all the way down once the list has the new row.
-  const [pendiente, setPendiente] = useState<{ ref: string; filas: Distribucion[] } | null>(null);
-  useEffect(() => {
-    if (!pendiente || rows === pendiente.filas) return;
-    const g = grupos.find((x) => x.ref === pendiente.ref);
-    if (g) setAbiertos((prev) => new Set([...prev, g.ref, ...clavesDeProducto(g.ref, g.equipos)]));
-    setPendiente(null);
-  }, [rows, pendiente, grupos]);
-
   function alternar(ref: string) {
     setAbiertos((prev) => {
       const next = new Set(prev);
@@ -191,19 +156,11 @@ export default function DistribucionView({
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        {isAdmin && !adding && (
-          <button
-            onClick={() => setAdding(true)}
-            className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-body-sm font-medium text-on-primary hover:opacity-90"
-          >
-            <span aria-hidden>+</span> Agregar distribución
-          </button>
-        )}
         <input
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Buscar producto, código o cliente…"
+          placeholder="Buscar producto, código, cliente o vendedor…"
           className={`w-72 py-2 ${inputClass}`}
         />
         {vencidas > 0 && (
@@ -239,29 +196,11 @@ export default function DistribucionView({
         </div>
       )}
 
-      {isAdmin && adding && (
-        <AddDistribucion
-          meses={meses}
-          catalog={catalog}
-          mesInicial={filtroActivo === TODOS ? "" : filtroActivo}
-          onSaved={(mes, ref) => {
-            setMesFiltro(mes);
-            if (ref) {
-              setAbiertos((prev) => new Set(prev).add(ref));
-              setPendiente({ ref, filas: rows });
-            }
-          }}
-          onClose={() => setAdding(false)}
-        />
-      )}
-
       {grupos.length === 0 ? (
         <div className="rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest p-10 text-center text-body-md text-on-surface-variant">
           {rows.length === 0
-            ? isAdmin
-              ? "Todavía no hay distribuciones. Agrega la primera con «Agregar distribución»."
-              : "Todavía no hay productos en distribución."
-            : "Ninguna distribución coincide con la búsqueda."}
+            ? "Todavía no hay ajustes. Aparecen aquí cuando el administrador ajusta una proyección en Comparación."
+            : "Ningún ajuste coincide con la búsqueda."}
         </div>
       ) : (
         <div className="flex flex-col gap-3">
@@ -298,7 +237,7 @@ export default function DistribucionView({
                       </div>
                       <div className="text-right">
                         <p className="text-label-sm uppercase tracking-wide text-on-surface-variant">
-                      {filtroActivo === TODOS ? "Total" : "Distribuyendo"}
+                      {filtroActivo === TODOS ? "Total" : "Ajustado"}
                     </p>
                         <p className="text-body-md font-semibold tabular-nums text-primary">
                           {formatQty(g.total)}
@@ -377,12 +316,11 @@ export default function DistribucionView({
                                             <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">Mes</th>
                                             <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">Cantidad</th>
                                             <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">Estado</th>
-                                            {isAdmin && <th className="w-40 px-3 py-1.5" />}
                                           </tr>
                                         </thead>
                                         <tbody>
                                           {v.items.map((r) => (
-                                            <Fila key={r.id} r={r} isAdmin={isAdmin} mesActual={mesActual} meses={meses} />
+                                            <Fila key={r.id} r={r} mesActual={mesActual} />
                                           ))}
                                         </tbody>
                                       </table>
@@ -405,433 +343,21 @@ export default function DistribucionView({
   );
 }
 
-function Fila({ r, isAdmin, mesActual, meses }: { r: Distribucion; isAdmin: boolean; mesActual: string; meses: Mes[] }) {
-  const router = useRouter();
-  const [editing, setEditing] = useState(false);
-  const [cantidad, setCantidad] = useState(String(r.cantidad));
-  const [mes, setMes] = useState(r.mes);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+function Fila({ r, mesActual }: { r: Distribucion; mesActual: string }) {
   const estado = estadoDe(r.mes, mesActual);
-  // A distribution of a month that already passed is not in the "from this month on" list: keep its month selectable.
-  const opciones = meses.some((m) => m.value === r.mes) ? meses : [{ value: r.mes, label: periodLabel(r.mes) }, ...meses];
-
-  function guardar() {
-    const fd = new FormData();
-    fd.set("id", String(r.id));
-    fd.set("cantidad", cantidad);
-    fd.set("mes", mes);
-    setError(null);
-    startTransition(async () => {
-      const res = await updateDistribucionAction(fd);
-      if (res?.error) setError(res.error);
-      else {
-        setEditing(false);
-        router.refresh();
-      }
-    });
-  }
-
-  function eliminar() {
-    if (!confirm(`¿Eliminar la distribución de ${r.partner} en ${r.producto_nombre}?`)) return;
-    const fd = new FormData();
-    fd.set("id", String(r.id));
-    startTransition(async () => {
-      const res = await deleteDistribucionAction(fd);
-      if (res?.error) setError(res.error);
-      else router.refresh();
-    });
-  }
-
   return (
-    <Fragment>
-      <tr className={`border-t border-outline-variant ${estado === "Vencida" ? "opacity-60" : ""}`}>
-        <td className="break-words py-2 pl-14 pr-3 text-body-sm text-on-surface">
-          {r.partner}
-          {r.vendedores.length > 1 && (
-            <span className="mt-0.5 block text-label-sm text-on-surface-variant">
-              Vendedores: <VendedorTag vendedores={r.vendedores} campo="vendedor" />
-            </span>
-          )}
-        </td>
-        <td className="px-3 py-2 text-body-sm text-on-surface">
-          {editing ? (
-            <select value={mes} onChange={(e) => setMes(e.target.value)} className={inputClass}>
-              {opciones.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          ) : (
-            periodLabel(r.mes)
-          )}
-        </td>
-        <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface">
-          {editing ? (
-            <input
-              type="number"
-              inputMode="decimal"
-              min="0"
-              value={cantidad}
-              onChange={(e) => setCantidad(e.target.value)}
-              className={`w-28 text-right ${inputClass}`}
-            />
-          ) : (
-            <>
-              {formatQty(r.cantidad)}
-              <UnitTag unit={r.unidad} />
-            </>
-          )}
-        </td>
-        <td className="px-3 py-2">
-          <span className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-label-sm font-semibold ${TAG[estado]}`}>
-            {estado}
-          </span>
-        </td>
-        {isAdmin && (
-          <td className="px-3 py-2 text-right">
-            {editing ? (
-              <div className="flex justify-end gap-1">
-                <button
-                  onClick={guardar}
-                  disabled={pending}
-                  className="rounded-md bg-primary px-2.5 py-1 text-label-sm font-medium text-on-primary hover:opacity-90 disabled:opacity-60"
-                >
-                  {pending ? "…" : "Guardar"}
-                </button>
-                <button
-                  onClick={() => {
-                    setEditing(false);
-                    setCantidad(String(r.cantidad));
-                    setMes(r.mes);
-                    setError(null);
-                  }}
-                  className="rounded-md px-2 py-1 text-label-sm text-on-surface-variant hover:bg-surface-container-high"
-                >
-                  Cancelar
-                </button>
-              </div>
-            ) : (
-              <div className="flex justify-end gap-1">
-                <button
-                  onClick={() => setEditing(true)}
-                  className="rounded-md border border-outline-variant px-2.5 py-1 text-label-sm font-medium text-on-surface-variant hover:bg-surface-container-high"
-                >
-                  Editar
-                </button>
-                <button
-                  onClick={eliminar}
-                  disabled={pending}
-                  className="rounded-md px-2 py-1 text-label-sm text-secondary hover:underline disabled:opacity-50"
-                >
-                  Eliminar
-                </button>
-              </div>
-            )}
-          </td>
-        )}
-      </tr>
-      {error && (
-        <tr>
-          <td colSpan={isAdmin ? 5 : 4} className="px-3 pb-2 text-body-sm text-secondary">
-            {error}
-          </td>
-        </tr>
-      )}
-    </Fragment>
-  );
-}
-
-type Hit = { partner: string; vendedores: VendedorCliente[] };
-
-/**
- * The vendedor (or team) that sold to the client most recently, with "+N" when others did too. Hovering
- * it lists every vendedor with their team. The list is fixed-positioned so the table's scroll area
- * does not clip it.
- */
-function VendedorTag({ vendedores, campo }: { vendedores: VendedorCliente[]; campo: keyof VendedorCliente }) {
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-  if (vendedores.length === 0) return <span className="text-on-surface-variant">—</span>;
-  const valores = [...new Set(vendedores.map((v) => v[campo]))];
-  const hay = vendedores.length > 1;
-  return (
-    <span
-      className={hay ? "cursor-help" : undefined}
-      onMouseEnter={(e) => {
-        if (!hay) return;
-        const r = e.currentTarget.getBoundingClientRect();
-        setPos({ x: r.left, y: r.bottom + 4 });
-      }}
-      onMouseLeave={() => setPos(null)}
-    >
-      {valores[0]}
-      {valores.length > 1 && (
-        <span className="ml-1.5 rounded bg-surface-container-high px-1 py-0.5 text-label-sm text-on-surface-variant">
-          +{valores.length - 1}
+    <tr className={`border-t border-outline-variant ${estado === "Vencida" ? "opacity-60" : ""}`}>
+      <td className="break-words py-2 pl-14 pr-3 text-body-sm text-on-surface">{r.partner}</td>
+      <td className="px-3 py-2 text-body-sm text-on-surface">{periodLabel(r.mes)}</td>
+      <td className="px-3 py-2 text-right text-body-sm tabular-nums text-on-surface">
+        {formatQty(r.cantidad)}
+        <UnitTag unit={r.unidad} />
+      </td>
+      <td className="px-3 py-2">
+        <span className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-label-sm font-semibold ${TAG[estado]}`}>
+          {estado}
         </span>
-      )}
-      {pos && <VendedoresList vendedores={vendedores} pos={pos} />}
-    </span>
-  );
-}
-
-function VendedoresList({ vendedores, pos }: { vendedores: VendedorCliente[]; pos: { x: number; y: number } }) {
-  return (
-    <span
-      role="tooltip"
-      style={{ position: "fixed", left: Math.min(pos.x, window.innerWidth - 300), top: pos.y }}
-      className="z-50 block w-72 max-w-[90vw] rounded-md border border-outline-variant bg-surface-container-lowest p-2 text-left shadow-lg shadow-black/10"
-    >
-      <span className="mb-1 block text-label-sm uppercase tracking-wide text-on-surface-variant">
-        Vendedores del cliente ({vendedores.length})
-      </span>
-      {vendedores.map((v) => (
-        <span key={`${v.vendedor}|${v.equipo}`} className="flex justify-between gap-3 py-0.5 text-body-sm text-on-surface">
-          <span className="break-words">{v.vendedor}</span>
-          <span className="shrink-0 text-on-surface-variant">{v.equipo}</span>
-        </span>
-      ))}
-    </span>
-  );
-}
-
-/** Admin form: product (from the catalog), client (existing ones are suggested; a new name is allowed), quantity, until which month. */
-function AddDistribucion({
-  meses,
-  catalog,
-  mesInicial,
-  onSaved,
-  onClose,
-}: {
-  meses: Mes[];
-  catalog: CatalogProduct[];
-  /** Month preselected: the one being viewed, when a single month is. */
-  mesInicial: string;
-  /** Called with the month and product just saved, so the list switches to that month and opens the product. */
-  onSaved: (mes: string, producto_ref: string | undefined) => void;
-  onClose: () => void;
-}) {
-  const router = useRouter();
-  const formRef = useRef<HTMLFormElement>(null);
-  const [state, formAction, pending] = useActionState<ActionState, FormData>(saveDistribucionAction, null);
-  // The form resets itself when the action ends, so the month that was sent is kept here.
-  const mesEnviado = useRef("");
-  const productoEnviado = useRef<string | undefined>(undefined);
-  const [producto, setProducto] = useState("");
-  const [partner, setPartner] = useState("");
-  const [hits, setHits] = useState<Hit[]>([]);
-  // The suggestion the admin chose (or typed in full): its vendedor and team are shown under the field.
-  const [picked, setPicked] = useState<Hit | null>(null);
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
-  const boxRef = useRef<HTMLDivElement>(null);
-
-  const elegido = useMemo(() => {
-    const t = producto.trim().toLowerCase();
-    return t ? catalog.find((p) => p.producto_nombre.toLowerCase() === t || p.producto_ref.toLowerCase() === t) : undefined;
-  }, [producto, catalog]);
-
-  useEffect(() => {
-    if (state?.success) {
-      if (mesEnviado.current) onSaved(mesEnviado.current, productoEnviado.current);
-      formRef.current?.reset();
-      setProducto("");
-      setPartner("");
-      setPicked(null);
-      setHits([]);
-      router.refresh();
-    }
-  }, [state, router]);
-
-  // Suggest existing clients while typing (debounced).
-  useEffect(() => {
-    const term = partner.trim();
-    if (term.length < 2) {
-      setHits([]);
-      setOpen(false);
-      return;
-    }
-    if (picked && picked.partner === partner) return;
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/clientes?${new URLSearchParams({ q: term, vendedor: "", producto_ref: "", period: "" })}`);
-        const data = await res.json();
-        if (!cancelled) {
-          const found: Hit[] = data.clientes ?? [];
-          setHits(found);
-          setActive(0);
-          setOpen(true);
-          // Typing a client's full name is as good as picking it from the list.
-          setPicked(found.find((h) => h.partner.toLowerCase() === term.toLowerCase()) ?? null);
-        }
-      } catch {
-        if (!cancelled) setHits([]);
-      }
-    }, 200);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [partner]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, []);
-
-  return (
-    <form
-      ref={formRef}
-      action={(fd) => {
-        mesEnviado.current = String(fd.get("mes") ?? "");
-        productoEnviado.current = elegido?.producto_ref;
-        return formAction(fd);
-      }}
-      className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest p-4"
-    >
-      <div className="flex flex-col gap-1">
-        <label className="text-label-sm text-on-surface-variant">Producto</label>
-        <input
-          name="producto"
-          list="distribucion-productos"
-          value={producto}
-          onChange={(e) => setProducto(e.target.value)}
-          required
-          autoComplete="off"
-          placeholder="Busca por nombre o código"
-          className={`w-80 ${inputClass}`}
-        />
-        <datalist id="distribucion-productos">
-          {catalog.map((p) => (
-            <option key={p.producto_ref} value={p.producto_nombre}>
-              {p.producto_ref}
-            </option>
-          ))}
-        </datalist>
-        <p className="h-4 text-label-sm text-on-surface-variant">{elegido ? `Código: ${elegido.producto_ref}` : ""}</p>
-      </div>
-
-      <div className="flex flex-col gap-1" ref={boxRef}>
-        <label className="text-label-sm text-on-surface-variant">Cliente</label>
-        <div className="relative">
-          <input
-            name="partner"
-            value={partner}
-            onChange={(e) => {
-              setPartner(e.target.value);
-              setPicked(null);
-            }}
-            onFocus={() => hits.length > 0 && setOpen(true)}
-            onKeyDown={(e) => {
-              if (!open || hits.length === 0) return;
-              if (e.key === "ArrowDown") {
-                e.preventDefault();
-                setActive((a) => (a + 1) % hits.length);
-              } else if (e.key === "ArrowUp") {
-                e.preventDefault();
-                setActive((a) => (a - 1 + hits.length) % hits.length);
-              } else if (e.key === "Enter") {
-                e.preventDefault();
-                setPartner(hits[active].partner);
-                setPicked(hits[active]);
-                setOpen(false);
-              } else if (e.key === "Escape") setOpen(false);
-            }}
-            required
-            autoComplete="off"
-            placeholder="Escribe y elige, o escribe uno nuevo"
-            className={`w-72 ${inputClass}`}
-          />
-          {open && hits.length > 0 && (
-            <ul className="absolute left-0 top-full z-30 mt-1 max-h-64 w-[26rem] max-w-[90vw] overflow-y-auto rounded-md border border-outline-variant bg-surface-container-lowest py-1 shadow-lg shadow-black/10">
-              {hits.map((h, i) => (
-                <li
-                  key={h.partner}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    setPartner(h.partner);
-                    setPicked(h);
-                    setOpen(false);
-                  }}
-                  className={`cursor-pointer px-3 py-1.5 text-body-sm ${i === active ? "bg-primary-fixed" : "hover:bg-primary-fixed/50"}`}
-                >
-                  {h.partner}
-                  <span className="block text-label-sm text-on-surface-variant">
-                    {h.vendedores.length > 0
-                      ? `${h.vendedores[0].vendedor} · ${h.vendedores[0].equipo}${h.vendedores.length > 1 ? ` (+${h.vendedores.length - 1})` : ""}`
-                      : "Sin ventas registradas"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <p className="h-4" />
-      </div>
-
-      <div className="flex min-w-48 flex-col gap-1">
-        <label className="text-label-sm text-on-surface-variant">Vendedor y equipo</label>
-        <div className="flex h-[34px] items-center text-body-sm text-on-surface">
-          {picked && picked.vendedores.length > 0 ? (
-            <span>
-              <VendedorTag vendedores={picked.vendedores} campo="vendedor" />
-              <span className="text-on-surface-variant"> · {picked.vendedores[0].equipo}</span>
-            </span>
-          ) : (
-            <span className="text-on-surface-variant">{picked
-                ? "Sin ventas registradas"
-                : partner.trim() === ""
-                  ? "Elige un cliente"
-                  : hits.length > 0
-                    ? "Elige uno de la lista"
-                    : "Cliente nuevo, sin vendedor"}</span>
-          )}
-        </div>
-        <p className="h-4" />
-      </div>
-
-      <div className="flex flex-col gap-1">
-        <label className="text-label-sm text-on-surface-variant">
-          Cantidad{elegido ? "" : ""}
-        </label>
-        <input name="cantidad" type="number" inputMode="decimal" min="0" step="any" required placeholder="0" className={`w-28 ${inputClass}`} />
-        <p className="h-4" />
-      </div>
-
-      <div className="flex flex-col gap-1">
-        <label className="text-label-sm text-on-surface-variant">Mes</label>
-        <select name="mes" required defaultValue={mesInicial} className={inputClass}>
-          <option value="" disabled>
-            Elige el mes
-          </option>
-          {meses.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-        <p className="h-4" />
-      </div>
-
-      <div className="flex items-center gap-2 pb-4">
-        <button
-          type="submit"
-          disabled={pending}
-          className="h-10 rounded-md bg-primary px-4 text-body-sm font-medium text-on-primary hover:opacity-90 disabled:opacity-60"
-        >
-          {pending ? "Guardando…" : "Guardar"}
-        </button>
-        <button type="button" onClick={onClose} className="h-10 rounded-md px-3 text-body-sm text-on-surface-variant hover:bg-surface-container-high">
-          Cerrar
-        </button>
-      </div>
-      {state?.error && <p className="w-full text-body-sm text-secondary">{state.error}</p>}
-      {state?.success && <p className="w-full text-body-sm text-[#1b5e2f]">{state.success}</p>}
-    </form>
+      </td>
+    </tr>
   );
 }

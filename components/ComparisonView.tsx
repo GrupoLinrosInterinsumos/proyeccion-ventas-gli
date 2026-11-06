@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { saveComparisonNoteAction } from "@/app/actions";
+import { saveAjusteAction, saveComparisonNoteAction } from "@/app/actions";
 import { formatQty, formatUsdCompact, initials } from "@/lib/format";
 import type { MonthComparison } from "@/lib/comparison";
 import type { Unit } from "@/lib/units";
@@ -27,7 +27,8 @@ const BAR: Record<Exclude<Estado, "">, string> = {
   "Sin venta": "bg-outline-variant",
 };
 
-type Cliente = { partner: string; pq: number; pu: number; rq: number; ru: number };
+/** `aj` is the admin's adjusted quantity for the client; null when there is none. */
+type Cliente = { partner: string; pq: number; pu: number; rq: number; ru: number; aj: number | null };
 type Prod = {
   ref: string;
   nombre: string;
@@ -37,6 +38,9 @@ type Prod = {
   pu: number;
   rq: number;
   ru: number;
+  /** Sum of the clients' adjustments and how many clients are adjusted. */
+  aj: number;
+  nAj: number;
   estado: Estado;
   clientes: Cliente[];
 };
@@ -142,6 +146,8 @@ export default function ComparisonView({
   const avance = Math.min(dia / diasMes, 1);
   const [notas, setNotas] = useState<Record<string, string>>(data.notas);
   useEffect(() => setNotas(data.notas), [data.notas]);
+  const [ajustes, setAjustes] = useState<Record<string, number>>(data.ajustes);
+  useEffect(() => setAjustes(data.ajustes), [data.ajustes]);
 
   const [fSede, setFSede] = useState("");
   const [fVend, setFVend] = useState("");
@@ -166,18 +172,23 @@ export default function ComparisonView({
         const info = data.productos[ref];
         vv.set(
           ref,
-          (pr = { ref, nombre: info?.n ?? ref, unit: info?.u ?? "kg", cat: info?.c ?? "Sin categoría", pq: 0, pu: 0, rq: 0, ru: 0, estado: "", clientes: [] })
+          (pr = { ref, nombre: info?.n ?? ref, unit: info?.u ?? "kg", cat: info?.c ?? "Sin categoría", pq: 0, pu: 0, rq: 0, ru: 0, aj: 0, nAj: 0, estado: "", clientes: [] })
         );
       }
+      const aj = ajustes[noteKey(v, ref, partner)] ?? null;
       pr.pq += pq;
       pr.pu += pu;
       pr.rq += rq;
       pr.ru += ru;
-      pr.clientes.push({ partner, pq, pu, rq, ru });
+      if (aj !== null) {
+        pr.aj += aj;
+        pr.nAj += 1;
+      }
+      pr.clientes.push({ partner, pq, pu, rq, ru, aj });
     }
     for (const vv of map.values()) for (const pr of vv.values()) pr.estado = estadoDe(pr.pq, pr.rq, avance);
     return map;
-  }, [data.rows, data.productos, avance]);
+  }, [data.rows, data.productos, ajustes, avance]);
 
   const isPending = (v: string, ref: string, c: Cliente) =>
     estadoDe(c.pq, c.rq, avance) === "Superó la proyección" && !notas[noteKey(v, ref, c.partner)]?.trim();
@@ -363,6 +374,7 @@ export default function ComparisonView({
         <span>
           Falta = proyectado − vendido (<span className="font-semibold text-on-primary-fixed-variant">−</span> = ya vendió por encima)
         </span>
+        <span>Ajuste = cantidad que fija el administrador en lugar de lo proyectado; se ve en Distribución</span>
       </div>
 
       {blocks.length === 0 ? (
@@ -450,9 +462,9 @@ export default function ComparisonView({
                           </Th>
                           <Th><SortBtn k="proy" label="Proyectado" sort={sort} setSort={setSort} /></Th>
                           <Th><SortBtn k="vend" label="Vendido a hoy" sort={sort} setSort={setSort} /></Th>
+                          <Th>Ajuste</Th>
                           <Th><SortBtn k="pct" label="Avance" sort={sort} setSort={setSort} /></Th>
                           <Th><SortBtn k="falta" label="Falta" sort={sort} setSort={setSort} /></Th>
-                          <Th>Estado</Th>
                         </tr>
                       </thead>
                       <tbody>
@@ -490,12 +502,24 @@ export default function ComparisonView({
                                 </td>
                                 <Num>{formatQty(p.pq)}<UnitTag unit={p.unit} /></Num>
                                 <Num>{formatQty(p.rq)}<UnitTag unit={p.unit} /></Num>
+                                <Num>
+                                  {p.nAj > 0 ? (
+                                    <span
+                                      className="font-semibold text-primary"
+                                      title={`${p.nAj} cliente${p.nAj === 1 ? "" : "s"} con ajuste`}
+                                    >
+                                      {formatQty(p.aj)}
+                                      <UnitTag unit={p.unit} />
+                                    </span>
+                                  ) : (
+                                    <span className="text-on-surface-variant">—</span>
+                                  )}
+                                </Num>
                                 <td className="min-w-[120px] px-3 py-2">
                                   {p.pq > 0 && <p className="text-right text-label-md font-semibold tabular-nums">{pctOf(p.rq, p.pq)}%</p>}
                                   <Bar real={p.rq} proy={p.pq} estado={p.estado} avance={avance} />
                                 </td>
                                 <Num><Falta pq={p.pq} rq={p.rq} unit={p.unit} /></Num>
-                                <td className="px-3 py-2 text-right"><Tag estado={p.estado} /></td>
                               </tr>
                               {ex && (
                                 <tr>
@@ -507,6 +531,15 @@ export default function ComparisonView({
                                       avance={avance}
                                       notas={notas}
                                       canNote={isAdmin || v === ownVendedor}
+                                      canAdjust={isAdmin}
+                                      onAjuste={(partner, cantidad) =>
+                                        setAjustes((a) => {
+                                          const n = { ...a };
+                                          if (cantidad === null) delete n[noteKey(v, p.ref, partner)];
+                                          else n[noteKey(v, p.ref, partner)] = cantidad;
+                                          return n;
+                                        })
+                                      }
                                       highlight={pick?.t === "c" ? pick.v : term}
                                       onNote={(partner, nota) => {
                                         setNotas((n) => ({ ...n, [noteKey(v, p.ref, partner)]: nota }));
@@ -592,8 +625,10 @@ function Clientes({
   avance,
   notas,
   canNote,
+  canAdjust,
   highlight,
   onNote,
+  onAjuste,
 }: {
   v: string;
   p: Prod;
@@ -601,8 +636,10 @@ function Clientes({
   avance: number;
   notas: Record<string, string>;
   canNote: boolean;
+  canAdjust: boolean;
   highlight: string;
   onNote: (partner: string, nota: string) => void;
+  onAjuste: (partner: string, cantidad: number | null) => void;
 }) {
   const rows = [...p.clientes].sort((a, b) => b.rq + b.pq - (a.rq + a.pq));
   return (
@@ -617,9 +654,9 @@ function Clientes({
               <th className="px-3 py-1.5 text-left text-label-sm uppercase tracking-wide text-on-surface-variant">Cliente</th>
               <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">Proyectado</th>
               <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">Vendido</th>
+              <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">Ajuste</th>
               <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">Avance</th>
               <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">Falta</th>
-              <th className="px-3 py-1.5 text-right text-label-sm uppercase tracking-wide text-on-surface-variant">Estado</th>
             </tr>
           </thead>
           <tbody>
@@ -633,12 +670,21 @@ function Clientes({
                     <td className="break-words px-3 py-1.5 text-body-sm text-on-surface">{c.partner}</td>
                     <Num>{formatQty(c.pq)}<UnitTag unit={p.unit} /></Num>
                     <Num>{formatQty(c.rq)}<UnitTag unit={p.unit} /></Num>
+                    <td className="px-3 py-1.5 text-right text-body-sm tabular-nums text-on-surface">
+                      <AjusteCell
+                        period={period}
+                        v={v}
+                        p={p}
+                        c={c}
+                        canAdjust={canAdjust}
+                        onSaved={(cantidad) => onAjuste(c.partner, cantidad)}
+                      />
+                    </td>
                     <td className="min-w-[110px] px-3 py-1.5">
                       {c.pq > 0 && <p className="text-right text-label-md font-semibold tabular-nums">{pctOf(c.rq, c.pq)}%</p>}
                       <Bar real={c.rq} proy={c.pq} estado={estado} avance={avance} />
                     </td>
                     <Num><Falta pq={c.pq} rq={c.rq} unit={p.unit} /></Num>
-                    <td className="px-3 py-1.5 text-right"><Tag estado={estado} /></td>
                   </tr>
                   {estado === "Superó la proyección" && (
                     <tr className="border-b border-outline-variant last:border-b-0">
@@ -653,6 +699,112 @@ function Clientes({
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The admin's adjustment of what a vendedor projected for one client. Everyone sees it; the admin edits it
+ * (an empty value removes it). The Distribución page lists these.
+ */
+function AjusteCell({
+  period,
+  v,
+  p,
+  c,
+  canAdjust,
+  onSaved,
+}: {
+  period: string;
+  v: string;
+  p: Prod;
+  c: Cliente;
+  canAdjust: boolean;
+  onSaved: (cantidad: number | null) => void;
+}) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(c.aj === null ? "" : String(c.aj));
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  useEffect(() => setText(c.aj === null ? "" : String(c.aj)), [c.aj]);
+
+  function save(value: string) {
+    const fd = new FormData();
+    fd.set("period", period);
+    fd.set("vendedor", v);
+    fd.set("producto_ref", p.ref);
+    fd.set("partner", c.partner);
+    fd.set("cantidad", value);
+    setError(null);
+    startTransition(async () => {
+      const res = await saveAjusteAction(fd);
+      if (res?.error) setError(res.error);
+      else {
+        setEditing(false);
+        onSaved(value.trim() === "" ? null : Number(value.replace(/,/g, "")));
+        router.refresh();
+      }
+    });
+  }
+
+  if (editing) {
+    return (
+      <div className="flex flex-col items-end gap-1">
+        <div className="flex items-center gap-1">
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="any"
+            autoFocus
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save(text);
+              else if (e.key === "Escape") setEditing(false);
+            }}
+            className="w-24 rounded-md border border-outline-variant bg-surface-container-lowest px-2 py-1 text-right text-body-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+          />
+          <button
+            onClick={() => save(text)}
+            disabled={pending}
+            className="rounded-md bg-primary px-2 py-1 text-label-sm font-medium text-on-primary hover:opacity-90 disabled:opacity-60"
+          >
+            {pending ? "…" : "Guardar"}
+          </button>
+          <button
+            onClick={() => {
+              setEditing(false);
+              setText(c.aj === null ? "" : String(c.aj));
+              setError(null);
+            }}
+            className="rounded-md px-1.5 py-1 text-label-sm text-on-surface-variant hover:bg-surface-container-high"
+          >
+            Cancelar
+          </button>
+        </div>
+        <p className="text-label-sm text-on-surface-variant">Vacío quita el ajuste</p>
+        {error && <p className="text-label-sm text-secondary">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-2">
+      {c.aj === null ? (
+        <span className="text-on-surface-variant">—</span>
+      ) : (
+        <span className="font-semibold text-primary">
+          {formatQty(c.aj)}
+          <UnitTag unit={p.unit} />
+        </span>
+      )}
+      {canAdjust && (
+        <button onClick={() => setEditing(true)} className="text-label-sm font-medium text-primary hover:underline">
+          {c.aj === null ? "Ajustar" : "Editar"}
+        </button>
+      )}
     </div>
   );
 }
